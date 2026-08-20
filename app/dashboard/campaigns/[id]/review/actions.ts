@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentWorkspace } from "@/lib/workspace";
-import { renderTemplate } from "@/lib/template-renderer";
+import { renderTemplate, extractSmartFirstName } from "@/lib/template-renderer";
 import { revalidatePath } from "next/cache";
 import { GmailProvider } from "@/lib/email/gmail-provider";
 
@@ -40,15 +40,16 @@ export async function generateSnapshots(campaignId: string) {
     const lead = Array.isArray(rec.leads) ? rec.leads[0] : rec.leads;
     if (!lead) continue;
 
+    const smartFirstName = extractSmartFirstName(lead.first_name, lead.full_name, lead.email);
     const variables = {
-      first_name: lead.first_name,
-      last_name: lead.last_name,
-      full_name: lead.full_name,
-      company_name: lead.company_name,
-      job_title: lead.job_title,
-      website: lead.website_url,
-      booking_link: campaign.booking_url,
-      sender_name: campaign.sender_name,
+      first_name: smartFirstName,
+      last_name: lead.last_name || "",
+      full_name: lead.full_name || smartFirstName,
+      company_name: lead.company_name || "",
+      job_title: lead.job_title || "",
+      website: lead.website_url || "",
+      booking_link: campaign.booking_url || "",
+      sender_name: campaign.sender_name || "",
       sender_email: "",
     };
 
@@ -240,12 +241,14 @@ export async function approveCampaign(campaignId: string) {
       let renderedSubject = rec.rendered_subject;
       let renderedBody = rec.rendered_body;
 
-      // Automatically render template if not already rendered
-      if ((!renderedSubject || !renderedBody) && template) {
+      const smartFirstName = extractSmartFirstName(lead?.first_name, lead?.full_name, leadEmail);
+
+      // Automatically render template if not already rendered or if it contains unrendered variables
+      if ((!renderedSubject || !renderedBody || renderedBody.includes("{{")) && template) {
         const variables = {
-          first_name: lead?.first_name || "",
+          first_name: smartFirstName,
           last_name: lead?.last_name || "",
-          full_name: lead?.full_name || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || leadEmail,
+          full_name: lead?.full_name || smartFirstName,
           company_name: lead?.company_name || "",
           job_title: lead?.job_title || "",
           website: lead?.website_url || "",

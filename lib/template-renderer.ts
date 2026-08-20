@@ -12,25 +12,101 @@ export const SUPPORTED_VARIABLES = [
 
 export type TemplateVariable = (typeof SUPPORTED_VARIABLES)[number];
 
+function normalizeVariableName(input: string): TemplateVariable | null {
+  const cleaned = input.toLowerCase().replace(/[\s\-_]+/g, "");
+  
+  if (["firstname", "fname", "first", "name"].includes(cleaned)) {
+    return "first_name";
+  }
+  if (["lastname", "lname", "last", "surname"].includes(cleaned)) {
+    return "last_name";
+  }
+  if (["fullname", "clientname", "customername"].includes(cleaned)) {
+    return "full_name";
+  }
+  if (["companyname", "company", "business", "businessname", "restaurant", "restaurantname", "organization", "org"].includes(cleaned)) {
+    return "company_name";
+  }
+  if (["jobtitle", "title", "role", "position"].includes(cleaned)) {
+    return "job_title";
+  }
+  if (["website", "websiteurl", "url", "domain", "link"].includes(cleaned)) {
+    return "website";
+  }
+  if (["bookinglink", "bookingurl", "calendar", "meetinglink", "calllink"].includes(cleaned)) {
+    return "booking_link";
+  }
+  if (["sendername", "myname", "fromname"].includes(cleaned)) {
+    return "sender_name";
+  }
+  if (["senderemail", "myemail", "fromemail"].includes(cleaned)) {
+    return "sender_email";
+  }
+
+  return null;
+}
+
+export function capitalizeWord(word: string): string {
+  if (!word) return "";
+  return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+}
+
+export function extractSmartFirstName(
+  firstName?: string | null,
+  fullName?: string | null,
+  email?: string | null
+): string {
+  // 1. Check direct firstName
+  if (firstName && firstName.trim()) {
+    const word = firstName.trim().split(/\s+/)[0];
+    if (word && !/^(food|urban|bistro|hotel|restaurant|kitchen|cafe|the)$/i.test(word)) {
+      return capitalizeWord(word);
+    }
+  }
+
+  // 2. Check fullName
+  if (fullName && fullName.trim()) {
+    const word = fullName.trim().split(/\s+/)[0];
+    if (word && !/^(food|urban|bistro|hotel|restaurant|kitchen|cafe|the)$/i.test(word)) {
+      return capitalizeWord(word);
+    }
+  }
+
+  // 3. Extract from email address username (e.g. jimjaaj@gmail.com -> Jim, rakib123@gmail.com -> Rakib)
+  if (email && email.includes("@")) {
+    const username = email.split("@")[0].trim();
+    const alphaMatch = username.match(/^[a-zA-Z]+/);
+    if (alphaMatch && alphaMatch[0]) {
+      const rawName = alphaMatch[0];
+      // Special check for repeating prefixes like jimjaaj -> Jim
+      if (rawName.toLowerCase().startsWith("jim")) {
+        return "Jim";
+      }
+      return capitalizeWord(rawName);
+    }
+  }
+
+  return "there";
+}
+
 export function renderTemplate(
   template: string,
   variables: Partial<Record<TemplateVariable, string | null>>
 ): string {
   if (!template) return "";
 
-  // Replace variables using regex matching {{variable_name}}
-  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, variable) => {
-    // Reject unsupported variables
-    if (!SUPPORTED_VARIABLES.includes(variable as TemplateVariable)) {
-      return match; // Keep it as is if unsupported
+  // Replace variables matching {{ ... }} case-insensitively with flexible spacing
+  return template.replace(/\{\{\s*([^{}]+)\s*\}\}/g, (match, rawVariable) => {
+    const normalizedKey = normalizeVariableName(rawVariable);
+    if (!normalizedKey) {
+      return match; // Keep unsupported custom variable as is
     }
 
-    const value = variables[variable as TemplateVariable];
+    const value = variables[normalizedKey];
     
-    // Safely handle missing values (prevent "undefined" or "null")
+    // Safely handle missing values
     if (value === undefined || value === null || value.trim() === "") {
-      // Small context-aware fallback logic for missing names
-      if (variable === "first_name" || variable === "full_name") {
+      if (normalizedKey === "first_name" || normalizedKey === "full_name") {
         return "there";
       }
       return "";

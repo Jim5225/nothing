@@ -129,8 +129,27 @@ export class GmailProvider implements EmailSendingProvider {
       const subject = Buffer.from(options.subject).toString("base64");
       const utf8Subject = `=?utf-8?B?${subject}?=`;
       
+      const senderDisplayName = options.fromName || account.display_name || "";
+      const fromHeader = senderDisplayName
+        ? `From: =?utf-8?B?${Buffer.from(senderDisplayName).toString("base64")}?= <${account.email_address}>`
+        : `From: ${account.email_address}`;
+
+      // Convert body to clean HTML email structure with proper typography
+      let htmlBody = options.body;
+      if (!htmlBody.includes("<html") && !htmlBody.includes("<div") && !htmlBody.includes("<p>")) {
+        let formatted = htmlBody.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+        formatted = formatted.replace(
+          /(https?:\/\/[^\s<]+)/g,
+          '<a href="$1" style="color: #2563eb; text-decoration: underline;" target="_blank">$1</a>'
+        );
+        const paragraphs = formatted.split(/\n\s*\n/);
+        htmlBody = paragraphs
+          .map((p) => `<p style="margin: 0 0 16px 0; line-height: 1.6; color: #1e293b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px;">${p.replace(/\n/g, "<br />")}</p>`)
+          .join("");
+      }
+
       const messageParts = [
-        `From: ${account.email_address}`,
+        fromHeader,
         `To: ${options.to}`,
         `Subject: ${utf8Subject}`,
         "Content-Type: text/html; charset=utf-8",
@@ -145,7 +164,7 @@ export class GmailProvider implements EmailSendingProvider {
       }
 
       messageParts.push("");
-      messageParts.push(options.body);
+      messageParts.push(htmlBody);
 
       const message = messageParts.join("\n");
       const encodedMessage = Buffer.from(message)

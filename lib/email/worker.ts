@@ -132,14 +132,28 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
       
       const jobType = job.job_type || "initial";
       
+      const { renderTemplate, extractSmartFirstName } = await import("@/lib/template-renderer");
+      const smartFirstName = extractSmartFirstName(lead?.first_name, lead?.full_name, lead?.email);
+      const variables = {
+        first_name: smartFirstName,
+        last_name: lead?.last_name || "",
+        full_name: lead?.full_name || smartFirstName,
+        company_name: lead?.company_name || "",
+        job_title: lead?.job_title || "",
+        website: lead?.website_url || "",
+        booking_link: campaign.booking_url || "",
+        sender_name: campaign.sender_name || "",
+        sender_email: "",
+      };
+
       if (jobType === "initial") {
         const snapshot = recipient.approved_snapshot;
         if (!snapshot || !snapshot.subject || !snapshot.body) {
           finalJobStatus = "failed";
           throw new Error("Missing approved email snapshot (subject/body)");
         }
-        subjectToSend = snapshot.subject;
-        bodyToSend = snapshot.body;
+        subjectToSend = renderTemplate(snapshot.subject, variables);
+        bodyToSend = renderTemplate(snapshot.body, variables);
       } else {
         // Follow-up rendering on the fly
         let templateId = null;
@@ -157,18 +171,6 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
           throw new Error("Follow-up template not found");
         }
         
-        const { renderTemplate } = await import("@/lib/template-renderer");
-        const variables = {
-          first_name: lead.first_name,
-          last_name: lead.last_name,
-          full_name: lead.full_name,
-          company_name: lead.company_name,
-          job_title: lead.job_title,
-          website: lead.website_url,
-          booking_link: campaign.booking_url,
-          sender_name: campaign.sender_name,
-          sender_email: "",
-        };
         subjectToSend = renderTemplate(template.subject, variables);
         bodyToSend = renderTemplate(template.body, variables);
       }
@@ -185,11 +187,12 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
       // 3. Instantiate decoupled GmailProvider with service client
       const provider = new GmailProvider(campaign.email_account_id, supabase);
 
-      // 4. Dispatch Email
+      // 4. Dispatch Email with sender name
       const sendOptions: SendEmailOptions = {
         to: lead.email,
         subject: subjectToSend,
         body: bodyToSend,
+        fromName: campaign.sender_name || undefined,
       };
       
       if (jobType !== "initial" && recipient.provider_thread_id) {

@@ -2,6 +2,7 @@ export interface SendEmailOptions {
   to: string;
   subject: string;
   body: string;
+  fromName?: string;
   replyTo?: string;
   threadId?: string;
   inReplyToMessageId?: string;
