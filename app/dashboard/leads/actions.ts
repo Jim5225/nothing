@@ -3,6 +3,12 @@
 import { createClient } from "@/lib/supabase/server";
 import { getCurrentWorkspace } from "@/lib/workspace";
 import { revalidatePath } from "next/cache";
+import { RawLeadInput, LeadImportResult, NormalizedLead, LeadValidationError } from "@/lib/leads/lead-types";
+import { normalizeLeadRecord } from "@/lib/leads/normalizer";
+import { validateLead } from "@/lib/leads/validator";
+import { deduplicateInBatch } from "@/lib/leads/deduplicator";
+import { detectInputFormat } from "@/lib/leads/parser";
+import { refineLeadInputWithAI } from "@/lib/leads/ai-refiner";
 
 export async function getLeads(page = 1, limit = 50, search = "") {
   const workspace = await getCurrentWorkspace();
@@ -32,24 +38,27 @@ export async function getLeads(page = 1, limit = 50, search = "") {
   return { data, count: count || 0 };
 }
 
+/**
+ * Core Production Lead Ingestion & Normalization Engine
+ */
 export async function processLeadImport(
   filename: string,
   totalRows: number,
-  mappedData: Record<string, string>[]
-) {
+  rawData: RawLeadInput[]
+): Promise<LeadImportResult> {
   const workspace = await getCurrentWorkspace();
   if (!workspace) throw new Error("Unauthorized");
   const workspaceId = workspace.workspace_id;
 
   const supabase = await createClient();
 
-  // 1. Create lead_import record
+  // 1. Create lead_imports record to track batch progress
   const { data: importRecord, error: importError } = await supabase
     .from("lead_imports")
     .insert({
       workspace_id: workspaceId,
-      filename,
-      total_rows: totalRows,
+      filename: filename || "Untitled_Import.csv",
+      total_rows: totalRows || rawData.length,
       status: "processing",
     })
     .select()
@@ -57,82 +66,118 @@ export async function processLeadImport(
 
   if (importError) throw importError;
 
-  let importedRows = 0;
+  const validationErrors: LeadValidationError[] = [];
+  const validNormalizedLeads: NormalizedLead[] = [];
   let invalidRows = 0;
-  let duplicateRows = 0;
+
+  // 2. Fetch workspace suppression list to exclude unsubscribed/bounced contacts
+  const { data: suppressionData } = await supabase
+    .from("lead_suppression")
+    .select("email")
+    .eq("workspace_id", workspaceId);
+
+  const suppressedSet = new Set<string>(
+    (suppressionData || []).map((s) => s.email.trim().toLowerCase())
+  );
+
+  // 3. Row-by-row Normalization & Validation with safe error isolation
+  rawData.forEach((row, index) => {
+    try {
+      if (!row || typeof row !== "object") {
+        invalidRows++;
+        validationErrors.push({
+          row: index + 1,
+          reason: "Malformed row object",
+        });
+        return;
+      }
+
+      const normalized = normalizeLeadRecord(row, workspaceId, "Import", importRecord.id);
+
+      if (!normalized) {
+        invalidRows++;
+        validationErrors.push({
+          row: index + 1,
+          email: String(row.email || ""),
+          reason: "Missing or invalid email address",
+        });
+        return;
+      }
+
+      const validation = validateLead(normalized);
+      if (!validation.valid) {
+        invalidRows++;
+        validationErrors.push({
+          row: index + 1,
+          email: normalized.email,
+          reason: validation.errors.join(", "),
+        });
+        return;
+      }
+
+      if (suppressedSet.has(normalized.normalized_email)) {
+        invalidRows++;
+        validationErrors.push({
+          row: index + 1,
+          email: normalized.email,
+          reason: "Email is on workspace suppression/do-not-contact list",
+        });
+        return;
+      }
+
+      validNormalizedLeads.push(normalized);
+    } catch (rowErr) {
+      invalidRows++;
+      validationErrors.push({
+        row: index + 1,
+        reason: rowErr instanceof Error ? rowErr.message : "Unexpected parsing error",
+      });
+    }
+  });
+
+  // 4. In-Batch Deduplication (merge fields for duplicate emails in same batch)
+  const { uniqueLeads, inBatchDuplicates } = deduplicateInBatch(validNormalizedLeads);
+
+  let importedRows = 0;
+  let duplicateRows = inBatchDuplicates;
   let failedRows = 0;
 
-  const validLeads = [];
+  // 5. Database Chunked Batch Insert with On-Conflict Deduplication
+  if (uniqueLeads.length > 0) {
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < uniqueLeads.length; i += CHUNK_SIZE) {
+      const chunk = uniqueLeads.slice(i, i + CHUNK_SIZE);
 
-  // 2. Validate & Normalize
-  for (const row of mappedData) {
-    if (!row.email || typeof row.email !== "string" || !row.email.includes("@")) {
-      invalidRows++;
-      continue;
-    }
+      try {
+        const { data: inserted, error: insertError } = await supabase
+          .from("leads")
+          .upsert(chunk, {
+            onConflict: "workspace_id,normalized_email",
+            ignoreDuplicates: true,
+          })
+          .select("id");
 
-    const normalized_email = row.email.trim().toLowerCase();
-
-    // Clean names
-    const cleanName = (name?: string) =>
-      name ? name.trim().charAt(0).toUpperCase() + name.trim().slice(1) : null;
-
-    const first_name = cleanName(row.first_name);
-    const last_name = cleanName(row.last_name);
-    const full_name = row.full_name
-      ? row.full_name.trim()
-      : first_name && last_name
-      ? `${first_name} ${last_name}`
-      : first_name || last_name || null;
-
-    validLeads.push({
-      workspace_id: workspaceId,
-      email: row.email.trim(),
-      normalized_email,
-      first_name,
-      last_name,
-      full_name,
-      company_name: row.company_name?.trim() || null,
-      job_title: row.job_title?.trim() || null,
-      website_url: row.website_url?.trim() || null,
-      linkedin_url: row.linkedin_url?.trim() || null,
-      phone: row.phone?.trim() || null,
-      location: row.location?.trim() || null,
-      industry: row.industry?.trim() || null,
-      source: "CSV Import",
-      source_record_id: importRecord.id,
-    });
-  }
-
-  // 3. Batch Insert with Deduplication
-  if (validLeads.length > 0) {
-    const chunkSize = 1000;
-    for (let i = 0; i < validLeads.length; i += chunkSize) {
-      const chunk = validLeads.slice(i, i + chunkSize);
-
-      const { data: inserted, error: insertError } = await supabase
-        .from("leads")
-        .upsert(chunk, {
-          onConflict: "workspace_id,normalized_email",
-          ignoreDuplicates: true,
-        })
-        .select("id");
-
-      if (insertError) {
+        if (insertError) {
+          console.error("[Database Batch Insert Error]", insertError);
+          failedRows += chunk.length;
+        } else {
+          const insertedCount = inserted?.length || 0;
+          importedRows += insertedCount;
+          duplicateRows += chunk.length - insertedCount;
+        }
+      } catch (chunkErr) {
+        console.error("[Chunk Exception]", chunkErr);
         failedRows += chunk.length;
-      } else {
-        const insertedCount = inserted?.length || 0;
-        importedRows += insertedCount;
-        duplicateRows += chunk.length - insertedCount;
       }
     }
   }
 
-  // 4. Update import record
+  // 6. Finalize lead_imports record
   await supabase
     .from("lead_imports")
     .update({
-      valid_rows: validLeads.length,
+      total_rows: totalRows || rawData.length,
+      valid_rows: validNormalizedLeads.length,
       invalid_rows: invalidRows,
       duplicate_rows: duplicateRows,
       imported_rows: importedRows,
@@ -142,26 +187,81 @@ export async function processLeadImport(
     })
     .eq("id", importRecord.id);
 
-  const { logActivity } = await import("@/lib/activity");
-  await logActivity("csv_import", { 
-    filename, 
-    imported: importedRows, 
-    duplicates: duplicateRows 
-  });
+  // 7. Audit Logging
+  try {
+    const { logActivity } = await import("@/lib/activity");
+    await logActivity("csv_import", {
+      filename: filename || "Lead_Import",
+      imported: importedRows,
+      duplicates: duplicateRows,
+      invalid: invalidRows,
+    });
+  } catch {
+    // Non-blocking
+  }
 
   revalidatePath("/dashboard/leads");
+  revalidatePath("/dashboard/analytics");
+  revalidatePath("/dashboard");
 
   return {
     success: true,
+    importId: importRecord.id,
     stats: {
-      totalRows,
-      validRows: validLeads.length,
+      totalRows: totalRows || rawData.length,
+      validRows: validNormalizedLeads.length,
       invalidRows,
       duplicateRows,
       importedRows,
       failedRows,
     },
+    errors: validationErrors.slice(0, 50), // Return sample of validation errors
   };
+}
+
+/**
+ * High-level unified import action:
+ * Accepts any raw text (CSV, Markdown, JSON, Unstructured), refines it with Gemini,
+ * and saves into Supabase.
+ */
+export async function processRawInputImport(
+  rawText: string,
+  filename = "Direct_Import.csv"
+): Promise<LeadImportResult> {
+  if (!rawText || !rawText.trim()) {
+    return {
+      success: false,
+      error: "Input data is empty.",
+      stats: {
+        totalRows: 0,
+        validRows: 0,
+        invalidRows: 0,
+        duplicateRows: 0,
+        importedRows: 0,
+        failedRows: 0,
+      },
+    };
+  }
+
+  const format = detectInputFormat(rawText);
+  const aiResult = await refineLeadInputWithAI(rawText, format);
+
+  if (!aiResult.success || !aiResult.data || aiResult.data.length === 0) {
+    return {
+      success: false,
+      error: aiResult.error || "No valid contact information could be extracted.",
+      stats: {
+        totalRows: 0,
+        validRows: 0,
+        invalidRows: 1,
+        duplicateRows: 0,
+        importedRows: 0,
+        failedRows: 0,
+      },
+    };
+  }
+
+  return processLeadImport(filename, aiResult.data.length, aiResult.data);
 }
 
 export async function deleteSelectedLeads(leadIds: string[]) {
@@ -180,8 +280,12 @@ export async function deleteSelectedLeads(leadIds: string[]) {
 
   if (error) throw error;
 
-  const { logActivity } = await import("@/lib/activity");
-  await logActivity("leads_deleted", { count: count || leadIds.length });
+  try {
+    const { logActivity } = await import("@/lib/activity");
+    await logActivity("leads_deleted", { count: count || leadIds.length });
+  } catch {
+    // Non-blocking
+  }
 
   revalidatePath("/dashboard/leads");
   revalidatePath("/dashboard/analytics");
@@ -196,7 +300,6 @@ export async function deleteAllLeads() {
 
   const supabase = await createClient();
 
-  // Delete all leads for the workspace
   const { error, count } = await supabase
     .from("leads")
     .delete({ count: "exact" })
@@ -204,8 +307,12 @@ export async function deleteAllLeads() {
 
   if (error) throw error;
 
-  const { logActivity } = await import("@/lib/activity");
-  await logActivity("all_leads_purged", { count: count || 0 });
+  try {
+    const { logActivity } = await import("@/lib/activity");
+    await logActivity("all_leads_purged", { count: count || 0 });
+  } catch {
+    // Non-blocking
+  }
 
   revalidatePath("/dashboard/leads");
   revalidatePath("/dashboard/analytics");
@@ -214,4 +321,3 @@ export async function deleteAllLeads() {
 
   return { success: true, count: count || 0 };
 }
-
