@@ -260,6 +260,7 @@ export async function processLeadImport(
       totalRows: totalRows || rawData.length,
       validRows: validNormalizedLeads.length,
       invalidRows,
+      suppressedRows,
       duplicateRows,
       importedRows,
       failedRows,
