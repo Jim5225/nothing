@@ -355,6 +355,14 @@ export async function approveCampaign(campaignId: string) {
       // Non-blocking
     }
 
+    // 8. Trigger immediate background email processing
+    try {
+      const { processEmailQueue } = await import("@/lib/email/worker");
+      processEmailQueue().catch((err) => console.error("[Worker Immediate Processing Error]", err));
+    } catch (err) {
+      console.error("[Worker Import Error]", err);
+    }
+
     revalidatePath(`/dashboard/campaigns/${campaignId}`);
     revalidatePath(`/dashboard/campaigns/${campaignId}/review`);
 
@@ -363,6 +371,20 @@ export async function approveCampaign(campaignId: string) {
     return {
       success: false,
       error: err instanceof Error ? err.message : "An unexpected error occurred. Please try again.",
+    };
+  }
+}
+
+export async function triggerProcessQueue(campaignId: string) {
+  try {
+    const { processEmailQueue } = await import("@/lib/email/worker");
+    const result = await processEmailQueue();
+    revalidatePath(`/dashboard/campaigns/${campaignId}`);
+    return { success: true, result };
+  } catch (err: unknown) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to process queue",
     };
   }
 }

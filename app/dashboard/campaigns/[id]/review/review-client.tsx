@@ -108,9 +108,9 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
       if (result && !result.success) {
         alert(`Approval failed: ${result.error}`);
       } else {
-        alert("Campaign approved successfully!");
+        alert("Campaign approved successfully! Emails are now being dispatched.");
         setApproveOpen(false);
-        router.push("/dashboard/campaigns");
+        router.push(`/dashboard/campaigns/${campaign.id}`);
       }
     } catch (error: unknown) {
       alert(`Approval failed: ${error instanceof Error ? error.message : "Unknown error"}`);
@@ -173,14 +173,24 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
             <Mail className="w-4 h-4 mr-2 text-indigo-600" />
             Send Test
           </Button>
-          <Button 
-            onClick={() => setApproveOpen(true)} 
-            disabled={isApproved || !campaign.email_account_id || recipients.length === 0 || isGenerating}
-            className="bg-gradient-to-r from-emerald-500 via-teal-600 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-md shadow-emerald-500/25 border-0 transition-all scale-100 hover:scale-[1.02]"
-          >
-            <CheckCircle2 className="w-4 h-4 mr-2 text-white" />
-            Approve & Send
-          </Button>
+          {isApproved ? (
+            <Button 
+              onClick={() => router.push(`/dashboard/campaigns/${campaign.id}`)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-md shadow-emerald-500/25 border-0"
+            >
+              <CheckCircle2 className="w-4 h-4 mr-2 text-white" />
+              View Live Campaign Dashboard
+            </Button>
+          ) : (
+            <Button 
+              onClick={() => setApproveOpen(true)} 
+              disabled={!campaign.email_account_id || recipients.length === 0 || isGenerating}
+              className="bg-gradient-to-r from-emerald-500 via-teal-600 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-md shadow-emerald-500/25 border-0 transition-all scale-100 hover:scale-[1.02]"
+            >
+              <CheckCircle2 className="w-4 h-4 mr-2 text-white" />
+              Approve & Send
+            </Button>
+          )}
         </div>
       </div>
 
