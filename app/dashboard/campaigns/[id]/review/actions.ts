@@ -152,7 +152,7 @@ export async function sendTestEmail(campaignId: string, testEmailAddress: string
   });
 
   if (!res.success) {
-    throw new Error(res.error || "Failed to send test email");
+    return { success: false, error: res.error || "Failed to send test email" };
   }
 
   return { success: true };
@@ -177,12 +177,12 @@ export async function approveCampaign(campaignId: string) {
     .eq("workspace_id", workspaceId)
     .single();
 
-  if (campError || !campaign) throw new Error("Campaign not found");
+  if (campError || !campaign) return { success: false, error: "Campaign not found" };
   if (campaign.status === "approved" || campaign.status === "sending") {
     return { success: true, message: "Campaign is already approved or queued." };
   }
   if (!campaign.email_account_id || !campaign.email_accounts || campaign.email_accounts.status !== "connected") {
-    throw new Error("A connected and active Gmail account is required for campaign launch.");
+    return { success: false, error: "A connected and active Gmail account is required for campaign launch." };
   }
 
   // 2. Fetch recipients and ensure rendered subject/body exist
@@ -192,9 +192,9 @@ export async function approveCampaign(campaignId: string) {
     .eq("campaign_id", campaignId)
     .eq("workspace_id", workspaceId);
 
-  if (recError) throw recError;
+  if (recError) return { success: false, error: recError.message };
   if (!recipients || recipients.length === 0) {
-    throw new Error("Cannot approve campaign with no recipients.");
+    return { success: false, error: "Cannot approve campaign with no recipients." };
   }
 
   // 3. Filter workspace suppressed emails
@@ -223,7 +223,7 @@ export async function approveCampaign(campaignId: string) {
     seenLeadsInCampaign.add(leadEmail);
 
     if (!rec.rendered_subject || !rec.rendered_body) {
-      throw new Error(`Recipient ${leadEmail} is missing rendered email. Please regenerate previews.`);
+      return { success: false, error: `Recipient ${leadEmail} is missing rendered email. Please regenerate previews.` };
     }
 
     if (suppressedEmails.has(leadEmail)) {
@@ -234,7 +234,7 @@ export async function approveCampaign(campaignId: string) {
   }
 
   if (validRecipientsToQueue.length === 0) {
-    throw new Error("All recipients are suppressed or invalid. Cannot launch empty campaign.");
+    return { success: false, error: "All recipients are suppressed or invalid. Cannot launch empty campaign." };
   }
 
   // 4. Mark suppressed / duplicate recipients as stopped
@@ -281,7 +281,7 @@ export async function approveCampaign(campaignId: string) {
       .from("email_jobs")
       .upsert(jobsToInsert, { onConflict: "idempotency_key", ignoreDuplicates: true });
 
-    if (jobsError) throw new Error("Failed to queue email jobs: " + jobsError.message);
+    if (jobsError) return { success: false, error: "Failed to queue email jobs: " + jobsError.message };
   }
 
   // 6. Optimistic update of campaign status
@@ -294,7 +294,7 @@ export async function approveCampaign(campaignId: string) {
     .eq("id", campaignId)
     .in("status", ["draft", "ready"]);
 
-  if (updateCampError) throw updateCampError;
+  if (updateCampError) return { success: false, error: updateCampError.message };
 
   // 7. Audit log
   try {

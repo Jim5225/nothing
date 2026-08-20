@@ -74,9 +74,13 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
     if (!testEmail) return;
     setIsTesting(true);
     try {
-      await sendTestEmail(campaign.id, testEmail);
-      alert("Test email sent!");
-      setTestEmailOpen(false);
+      const result = await sendTestEmail(campaign.id, testEmail);
+      if (!result.success) {
+        alert(`Test failed: ${result.error}`);
+      } else {
+        alert("Test email sent!");
+        setTestEmailOpen(false);
+      }
     } catch (error: unknown) {
       alert(`Test failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
@@ -87,10 +91,14 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
   const handleApprove = async () => {
     setIsApproving(true);
     try {
-      await approveCampaign(campaign.id);
-      alert("Campaign approved successfully!");
-      setApproveOpen(false);
-      router.push("/dashboard/campaigns");
+      const result = await approveCampaign(campaign.id);
+      if (!result.success) {
+        alert(`Approval failed: ${result.error}`);
+      } else {
+        alert("Campaign approved successfully!");
+        setApproveOpen(false);
+        router.push("/dashboard/campaigns");
+      }
     } catch (error: unknown) {
       alert(`Approval failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
