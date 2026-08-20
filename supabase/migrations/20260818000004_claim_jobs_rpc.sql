@@ -5,10 +5,8 @@ RETURNS SETOF public.email_jobs
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
-DECLARE
-  claimed_job_ids UUID[];
 BEGIN
-  -- Select jobs that are queued and scheduled, locking them to prevent concurrent claims
+  RETURN QUERY
   WITH selected_jobs AS (
     SELECT id
     FROM public.email_jobs
@@ -18,19 +16,14 @@ BEGIN
     LIMIT batch_size
     FOR UPDATE SKIP LOCKED
   )
-  UPDATE public.email_jobs
+  UPDATE public.email_jobs e
   SET 
     status = 'processing',
     started_at = NOW(),
     updated_at = NOW(),
-    attempt_count = attempt_count + 1
-  WHERE id IN (SELECT id FROM selected_jobs)
-  RETURNING id INTO claimed_job_ids;
-
-  -- Return the claimed jobs fully
-  RETURN QUERY
-  SELECT *
-  FROM public.email_jobs
-  WHERE id = ANY(claimed_job_ids);
+    attempt_count = e.attempt_count + 1
+  FROM selected_jobs s
+  WHERE e.id = s.id
+  RETURNING e.*;
 END;
 $$;
