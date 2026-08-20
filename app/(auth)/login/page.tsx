@@ -11,13 +11,16 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const errorMessage = searchParams.get("error");
   const successMessage = searchParams.get("message");
-
   const [pending, setPending] = useState(false);
 
   async function handleSubmit(formData: FormData) {
     setPending(true);
-    await login(formData);
-    // Redirect is handled server-side; pending stays true until navigation
+    try {
+      await login(formData);
+    } catch (error) {
+      setPending(false);
+      throw error;
+    }
   }
 
   return (

@@ -31,17 +31,19 @@ export function CampaignEditor({ leads }: { leads: Lead[] }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const insertVariable = (variable: string) => {
-    if (!textareaRef.current) return;
+    const textToInsert = `{{${variable}}}`;
+    if (!textareaRef.current) {
+      setBody((prev) => prev + textToInsert);
+      return;
+    }
     
     const textarea = textareaRef.current;
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const textToInsert = `{{${variable}}}`;
+    const start = typeof textarea.selectionStart === "number" ? textarea.selectionStart : body.length;
+    const end = typeof textarea.selectionEnd === "number" ? textarea.selectionEnd : body.length;
     
     const newBody = body.substring(0, start) + textToInsert + body.substring(end);
     setBody(newBody);
     
-    // Attempt to restore focus/cursor
     setTimeout(() => {
       textarea.focus();
       textarea.setSelectionRange(start + textToInsert.length, start + textToInsert.length);
@@ -206,10 +208,13 @@ export function CampaignEditor({ leads }: { leads: Lead[] }) {
                       checked={selectedLeads.includes(lead.id)}
                       onCheckedChange={() => toggleLead(lead.id)}
                     />
-                    <div className="grid gap-1.5 leading-none cursor-pointer flex-1" onClick={() => toggleLead(lead.id)}>
-                      <Label htmlFor={`lead-${lead.id}`} className="font-medium cursor-pointer">
+                    <div className="grid gap-1.5 leading-none flex-1">
+                      <label 
+                        htmlFor={`lead-${lead.id}`} 
+                        className="font-medium cursor-pointer text-sm text-gray-900 select-none"
+                      >
                         {lead.full_name || lead.email}
-                      </Label>
+                      </label>
                       {lead.full_name && <p className="text-xs text-gray-500">{lead.email}</p>}
                       {lead.company_name && <p className="text-[10px] text-gray-400">{lead.company_name}</p>}
                     </div>

@@ -30,10 +30,12 @@ export function ImportClient() {
   const [showErrors, setShowErrors] = useState(false);
   const [rawText, setRawText] = useState("");
   const [currentFileName, setCurrentFileName] = useState("Uploaded_Leads.csv");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const startImportPipeline = async (textData: string, sourceName: string) => {
+    setErrorMessage(null);
     if (!textData || !textData.trim()) {
-      alert("Please provide a valid CSV file, Markdown table, or contact text.");
+      setErrorMessage("Please provide a valid CSV file, Markdown table, or contact text.");
       return;
     }
 
@@ -54,7 +56,7 @@ export function ImportClient() {
       setStep("summary");
     } catch (error) {
       console.error("[Lead Import Failed]", error);
-      alert(`Import Error: ${error instanceof Error ? error.message : "Unexpected error during import"}`);
+      setErrorMessage(error instanceof Error ? error.message : "Unexpected error during import");
       setStep("upload");
     } finally {
       setIsProcessing(false);
@@ -66,7 +68,7 @@ export function ImportClient() {
     if (!selectedFile) return;
 
     if (selectedFile.size === 0) {
-      alert("The selected file is empty (0 bytes). Please upload a file with lead records.");
+      setErrorMessage("The selected file is empty (0 bytes). Please upload a file with lead records.");
       e.target.value = "";
       return;
     }
@@ -82,7 +84,7 @@ export function ImportClient() {
     const droppedFile = e.dataTransfer.files?.[0];
     if (droppedFile) {
       if (droppedFile.size === 0) {
-        alert("The dropped file is empty (0 bytes).");
+        setErrorMessage("The dropped file is empty (0 bytes).");
         return;
       }
       const fileContent = await droppedFile.text();
@@ -103,6 +105,19 @@ export function ImportClient() {
   if (step === "upload") {
     return (
       <div className="space-y-6">
+        {/* Error Alert */}
+        {errorMessage && (
+          <div className="p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+              <span>{errorMessage}</span>
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => setErrorMessage(null)} className="text-red-700 hover:bg-red-100">
+              Dismiss
+            </Button>
+          </div>
+        )}
+
         {/* Banner */}
         <div className="p-4 rounded-xl bg-gradient-to-r from-purple-50 via-indigo-50 to-blue-50 border border-purple-100 flex items-center gap-3">
           <div className="p-2.5 rounded-xl bg-purple-600 text-white shadow-md">

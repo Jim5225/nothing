@@ -11,13 +11,16 @@ function SignupForm() {
   const searchParams = useSearchParams();
   const errorMessage = searchParams.get("error");
   const successMessage = searchParams.get("message");
-
   const [pending, setPending] = useState(false);
 
   async function handleSubmit(formData: FormData) {
     setPending(true);
-    await signup(formData);
-    // Redirect is handled server-side; pending stays true until navigation
+    try {
+      await signup(formData);
+    } catch (error) {
+      setPending(false);
+      throw error;
+    }
   }
 
   return (

@@ -49,13 +49,24 @@ export function LeadsClient({
     router.push(`/dashboard/leads?search=${encodeURIComponent(searchTerm)}`);
   };
 
+  const filteredLeads = initialLeads.filter((lead) => {
+    if (!searchTerm.trim()) return true;
+    const query = searchTerm.toLowerCase();
+    return (
+      (lead.full_name && lead.full_name.toLowerCase().includes(query)) ||
+      (lead.email && lead.email.toLowerCase().includes(query)) ||
+      (lead.company_name && lead.company_name.toLowerCase().includes(query)) ||
+      (lead.job_title && lead.job_title.toLowerCase().includes(query))
+    );
+  });
+
   const totalPages = Math.ceil(totalCount / 20);
 
   const toggleSelectAll = () => {
-    if (selectedLeads.length === initialLeads.length) {
+    if (selectedLeads.length === filteredLeads.length) {
       setSelectedLeads([]);
     } else {
-      setSelectedLeads(initialLeads.map((l) => l.id));
+      setSelectedLeads(filteredLeads.map((l) => l.id));
     }
   };
 
@@ -99,17 +110,11 @@ export function LeadsClient({
     );
     if (!confirmFirst) return;
 
-    const confirmSecond = confirm(
-      `Please confirm one more time: Do you really want to PURGE ALL ${totalCount} leads? This action cannot be undone.`
-    );
-    if (!confirmSecond) return;
-
     setIsDeleting(true);
     try {
       await deleteAllLeads();
       setSelectedLeads([]);
       router.refresh();
-      alert("All leads have been deleted successfully.");
     } catch (err) {
       console.error(err);
       alert("Failed to delete all leads.");
@@ -121,11 +126,10 @@ export function LeadsClient({
   return (
     <div className="space-y-4">
       {/* Top Action Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 border border-slate-200/80 rounded-xl shadow-xs">
-        <form onSubmit={handleSearch} className="relative w-full max-w-sm">
-          <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-xs">
+        <form onSubmit={handleSearch} className="relative flex-1 max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <Input
-            type="search"
             placeholder="Search by name, email, company..."
             className="pl-9 bg-slate-50/70 border-slate-200 focus:bg-white transition-all text-sm rounded-lg"
             value={searchTerm}
@@ -174,8 +178,8 @@ export function LeadsClient({
               <TableHead className="w-12 text-center">
                 <Checkbox
                   checked={
-                    initialLeads.length > 0 &&
-                    selectedLeads.length === initialLeads.length
+                    filteredLeads.length > 0 &&
+                    selectedLeads.length === filteredLeads.length
                   }
                   onCheckedChange={toggleSelectAll}
                 />
@@ -189,17 +193,17 @@ export function LeadsClient({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {initialLeads.length === 0 ? (
+            {filteredLeads.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-12 text-slate-500">
                   <div className="max-w-xs mx-auto space-y-1">
-                    <p className="font-medium text-slate-700">No leads in database</p>
-                    <p className="text-xs text-slate-400">Import a CSV, Excel, or Markdown file to populate your list.</p>
+                    <p className="font-medium text-slate-700">No matching leads found</p>
+                    <p className="text-xs text-slate-400">Try changing your search query or clear the filter.</p>
                   </div>
                 </TableCell>
               </TableRow>
             ) : (
-              initialLeads.map((lead) => (
+              filteredLeads.map((lead) => (
                 <TableRow key={lead.id} className="hover:bg-slate-50/60 transition-colors">
                   <TableCell className="text-center">
                     <Checkbox
