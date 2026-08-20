@@ -5,6 +5,14 @@ export interface SendEmailOptions {
   replyTo?: string;
 }
 
+export interface SendResult {
+  success: boolean;
+  messageId?: string;
+  error?: string;
+  isPermanentError?: boolean;
+  isRateLimit?: boolean;
+}
+
 export interface EmailSendingProvider {
   /**
    * Retrieves the current account details (e.g. from the database).
@@ -22,5 +30,5 @@ export interface EmailSendingProvider {
   /**
    * Sends an email using the provider.
    */
-  sendEmail(options: SendEmailOptions): Promise<{ success: boolean; messageId?: string; error?: string }>;
+  sendEmail(options: SendEmailOptions): Promise<SendResult>;
 }

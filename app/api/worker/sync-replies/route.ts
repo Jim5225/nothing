@@ -19,6 +19,11 @@ export async function POST(req: Request) {
   }
 }
 
-export async function GET(req: Request) {
-  return POST(req);
+export async function GET() {
+  return NextResponse.json(
+    {
+      error: "Method Not Allowed: GET requests cannot trigger state-changing worker execution. Use POST with authorization.",
+    },
+    { status: 405 }
+  );
 }

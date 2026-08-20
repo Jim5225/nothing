@@ -26,21 +26,21 @@ export default async function CampaignDashboardPage(props: {
 
   if (!campaign) redirect("/dashboard/campaigns");
 
-  // If it's a draft or ready, redirect to Review page instead, since it hasn't been approved yet.
+  // If it's a draft or ready, redirect to Review page
   if (campaign.status === "draft" || campaign.status === "ready") {
     redirect(`/dashboard/campaigns/${params.id}/review`);
   }
 
-  // 2. Aggregate Stats from email_jobs
-  // In a large system we'd use RPC, but for V1 MVP we can fetch all jobs for this campaign
-  // by getting all recipient IDs first.
+  // 2. Aggregate Stats from campaign_recipients and email_jobs
   const { data: recipients } = await supabase
     .from("campaign_recipients")
-    .select("id")
-    .eq("campaign_id", params.id);
-    
-  const recipientIds = recipients?.map(r => r.id) || [];
-  
+    .select("id, status, replied_at")
+    .eq("campaign_id", params.id)
+    .eq("workspace_id", workspace.workspace_id);
+
+  const recipientList = recipients || [];
+  const recipientIds = recipientList.map((r) => r.id);
+
   let jobs: { status: string }[] = [];
   if (recipientIds.length > 0) {
     const { data: jobData } = await supabase
@@ -50,12 +50,23 @@ export default async function CampaignDashboardPage(props: {
     jobs = jobData || [];
   }
 
+  // Compute the 7 exact UI metric states
+  const total = recipientList.length;
+  const pending = jobs.filter((j) => j.status === "queued").length + recipientList.filter((r) => r.status === "pending" || r.status === "ready").length;
+  const processing = jobs.filter((j) => j.status === "processing").length;
+  const sent = recipientList.filter((r) => r.status === "sent" || r.status === "delivered").length;
+  const failed = recipientList.filter((r) => r.status === "failed" || r.status === "bounced").length;
+  const cancelled = recipientList.filter((r) => r.status === "stopped" || r.status === "unsubscribed").length + jobs.filter((j) => j.status === "cancelled").length;
+  const replied = recipientList.filter((r) => r.status === "replied" || r.replied_at !== null).length;
+
   const stats = {
-    total: recipientIds.length,
-    queued: jobs.filter(j => j.status === "queued" || j.status === "processing").length,
-    sent: jobs.filter(j => j.status === "sent").length,
-    failed: jobs.filter(j => j.status === "failed").length,
-    cancelled: jobs.filter(j => j.status === "cancelled").length,
+    total,
+    pending,
+    processing,
+    sent,
+    failed,
+    cancelled,
+    replied,
   };
 
   return (

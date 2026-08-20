@@ -24,7 +24,7 @@ export async function processReplySync() {
 
   for (const account of accounts) {
     try {
-      const provider = new GmailProvider(account.id);
+      const provider = new GmailProvider(account.id, supabase);
       const messages = await provider.fetchRecentInboxMessages(15);
 
       for (const msg of messages) {

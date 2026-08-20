@@ -1,12 +1,25 @@
 import { EmailSendingProvider, SendEmailOptions } from "./types";
 import { google } from "googleapis";
-import { createClient } from "@/lib/supabase/server";
+import { SupabaseClient } from "@supabase/supabase-js";
+import { createClient as createServerClient } from "@/lib/supabase/server";
 
 export class GmailProvider implements EmailSendingProvider {
   private accountId: string;
+  private supabase: SupabaseClient | null;
 
-  constructor(accountId: string) {
+  constructor(accountId: string, supabaseClient?: SupabaseClient) {
     this.accountId = accountId;
+    this.supabase = supabaseClient || null;
+  }
+
+  /**
+   * Helper to get Supabase client (uses provided service client or server session client)
+   */
+  private async getSupabaseClient(): Promise<SupabaseClient> {
+    if (this.supabase) {
+      return this.supabase;
+    }
+    return (await createServerClient()) as unknown as SupabaseClient;
   }
 
   private getOAuth2Client(accessToken: string, refreshToken: string) {
@@ -30,7 +43,7 @@ export class GmailProvider implements EmailSendingProvider {
   }
 
   async getAccount() {
-    const supabase = await createClient();
+    const supabase = await this.getSupabaseClient();
     const { data: account, error } = await supabase
       .from("email_accounts")
       .select("email_address, status")
@@ -48,7 +61,7 @@ export class GmailProvider implements EmailSendingProvider {
   }
 
   async refreshAuthentication(): Promise<boolean> {
-    const supabase = await createClient();
+    const supabase = await this.getSupabaseClient();
     const { data: account } = await supabase
       .from("email_accounts")
       .select("access_token, refresh_token, token_expires_at")
@@ -59,31 +72,29 @@ export class GmailProvider implements EmailSendingProvider {
       return false;
     }
 
-    // Check if token is actually expired (buffer of 5 mins)
+    // Check if token is still valid (with 5-min safety buffer)
     const now = Date.now();
-    if (account.token_expires_at && account.token_expires_at > now + 5 * 60 * 1000) {
-      return true; // Still valid
+    if (account.token_expires_at && new Date(account.token_expires_at).getTime() > now + 5 * 60 * 1000) {
+      return true;
     }
 
     try {
       const oauth2Client = this.getOAuth2Client(account.access_token, account.refresh_token);
       const { credentials } = await oauth2Client.refreshAccessToken();
 
-      // Update in DB
       await supabase
         .from("email_accounts")
         .update({
           access_token: credentials.access_token,
-          refresh_token: credentials.refresh_token || account.refresh_token, // Sometimes refresh_token is not returned
-          token_expires_at: credentials.expiry_date,
+          refresh_token: credentials.refresh_token || account.refresh_token,
+          token_expires_at: credentials.expiry_date ? new Date(credentials.expiry_date).toISOString() : null,
           status: "connected",
         })
         .eq("id", this.accountId);
 
       return true;
     } catch (error) {
-      console.error("Failed to refresh Gmail token:", error);
-      // Mark as expired
+      console.error("[GmailProvider] Failed to refresh Gmail token:", error);
       await supabase
         .from("email_accounts")
         .update({ status: "expired" })
@@ -93,26 +104,28 @@ export class GmailProvider implements EmailSendingProvider {
   }
 
   async sendEmail(options: SendEmailOptions) {
-    // Ensure token is fresh
     const isAuthed = await this.refreshAuthentication();
     if (!isAuthed) {
-      return { success: false, error: "Authentication expired or invalid" };
+      return { 
+        success: false, 
+        error: "Authentication expired or invalid grant",
+        isPermanentError: true,
+      };
     }
 
-    const supabase = await createClient();
+    const supabase = await this.getSupabaseClient();
     const { data: account } = await supabase
       .from("email_accounts")
       .select("access_token, refresh_token, email_address")
       .eq("id", this.accountId)
       .single();
 
-    if (!account) return { success: false, error: "Account not found" };
+    if (!account) return { success: false, error: "Account not found", isPermanentError: true };
 
     try {
       const oauth2Client = this.getOAuth2Client(account.access_token, account.refresh_token);
       const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-      // Construct MIME message
       const subject = Buffer.from(options.subject).toString("base64");
       const utf8Subject = `=?utf-8?B?${subject}?=`;
       
@@ -141,8 +154,17 @@ export class GmailProvider implements EmailSendingProvider {
 
       return { success: true, messageId: res.data.id || undefined };
     } catch (error: unknown) {
-      console.error("Gmail send error:", error);
-      return { success: false, error: error instanceof Error ? error.message : "Unknown error" };
+      console.error("[GmailProvider] Send error:", error);
+      const errMsg = error instanceof Error ? error.message : "Unknown error";
+      const isRateLimit = errMsg.includes("429") || errMsg.toLowerCase().includes("rate limit") || errMsg.toLowerCase().includes("quota");
+      const isPermanent = errMsg.toLowerCase().includes("invalid_grant") || errMsg.toLowerCase().includes("unregistered");
+
+      return { 
+        success: false, 
+        error: errMsg,
+        isRateLimit,
+        isPermanentError: isPermanent,
+      };
     }
   }
 
@@ -150,7 +172,7 @@ export class GmailProvider implements EmailSendingProvider {
     const isAuthed = await this.refreshAuthentication();
     if (!isAuthed) throw new Error("Authentication expired or invalid");
 
-    const supabase = await createClient();
+    const supabase = await this.getSupabaseClient();
     const { data: account } = await supabase
       .from("email_accounts")
       .select("access_token, refresh_token")
@@ -162,7 +184,6 @@ export class GmailProvider implements EmailSendingProvider {
     const oauth2Client = this.getOAuth2Client(account.access_token, account.refresh_token);
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Fetch recent messages in inbox
     const res = await gmail.users.messages.list({
       userId: "me",
       q: "in:inbox",

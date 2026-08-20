@@ -23,7 +23,7 @@ export async function generateSnapshots(campaignId: string) {
   if (campError || !campaign) throw new Error("Campaign not found");
   if (!campaign.email_templates) throw new Error("Template not found");
   if (campaign.status !== "draft" && campaign.status !== "ready") {
-    throw new Error("Cannot modify snapshots after approval.");
+    throw new Error("Cannot modify snapshots after campaign is approved.");
   }
 
   // Fetch pending recipients with leads
@@ -35,9 +35,8 @@ export async function generateSnapshots(campaignId: string) {
 
   if (recError) throw recError;
 
-  // Process all
+  // Process all recipients
   for (const rec of recipients) {
-    // Suppress TS errors assuming leads might be an array
     const lead = Array.isArray(rec.leads) ? rec.leads[0] : rec.leads;
     if (!lead) continue;
 
@@ -50,7 +49,7 @@ export async function generateSnapshots(campaignId: string) {
       website: lead.website_url,
       booking_link: campaign.booking_url,
       sender_name: campaign.sender_name,
-      sender_email: "", // Test/Preview mode
+      sender_email: "",
     };
 
     const renderedSubject = renderTemplate(campaign.email_templates.subject, variables);
@@ -81,7 +80,7 @@ export async function removeRecipient(recipientId: string, campaignId: string) {
     .single();
 
   if (campaign && campaign.status !== "draft" && campaign.status !== "ready") {
-    throw new Error("Cannot remove recipients after approval.");
+    throw new Error("Cannot remove recipients after campaign approval.");
   }
 
   const { error } = await supabase
@@ -116,7 +115,6 @@ export async function sendTestEmail(campaignId: string, testEmailAddress: string
 
   const supabase = await createClient();
 
-  // Fetch campaign
   const { data: campaign, error: campError } = await supabase
     .from("campaigns")
     .select("email_account_id, email_templates(*)")
@@ -127,7 +125,6 @@ export async function sendTestEmail(campaignId: string, testEmailAddress: string
   if (campError || !campaign) throw new Error("Campaign not found");
   if (!campaign.email_account_id) throw new Error("No connected Gmail account selected.");
 
-  // For test email, render generic variables
   const variables = {
     first_name: "Test",
     last_name: "User",
@@ -137,10 +134,12 @@ export async function sendTestEmail(campaignId: string, testEmailAddress: string
     website: "https://example.com",
     booking_link: "https://booking.com",
     sender_name: "Test Sender",
-    sender_email: "", 
+    sender_email: "",
   };
 
-  const template = Array.isArray(campaign.email_templates) ? campaign.email_templates[0] : campaign.email_templates;
+  const template = Array.isArray(campaign.email_templates)
+    ? campaign.email_templates[0]
+    : campaign.email_templates;
 
   const subject = "[TEST] " + renderTemplate(template.subject, variables);
   const body = renderTemplate(template.body, variables);
@@ -159,9 +158,14 @@ export async function sendTestEmail(campaignId: string, testEmailAddress: string
   return { success: true };
 }
 
+/**
+ * Approves campaign and enqueues jobs with optimistic locking, duplicate suppression,
+ * and deterministic idempotency keys.
+ */
 export async function approveCampaign(campaignId: string) {
   const workspace = await getCurrentWorkspace();
   if (!workspace) throw new Error("Unauthorized");
+  const workspaceId = workspace.workspace_id;
 
   const supabase = await createClient();
 
@@ -170,136 +174,142 @@ export async function approveCampaign(campaignId: string) {
     .from("campaigns")
     .select("*, email_accounts(status)")
     .eq("id", campaignId)
-    .eq("workspace_id", workspace.workspace_id)
+    .eq("workspace_id", workspaceId)
     .single();
 
   if (campError || !campaign) throw new Error("Campaign not found");
   if (campaign.status === "approved" || campaign.status === "sending") {
-    throw new Error("Campaign is already approved or sending");
+    return { success: true, message: "Campaign is already approved or queued." };
   }
   if (!campaign.email_account_id || !campaign.email_accounts || campaign.email_accounts.status !== "connected") {
-    throw new Error("A connected Gmail account is required for approval");
+    throw new Error("A connected and active Gmail account is required for campaign launch.");
   }
 
-  // 2. Check recipients
+  // 2. Fetch recipients and ensure rendered subject/body exist
   const { data: recipients, error: recError } = await supabase
     .from("campaign_recipients")
-    .select("id, lead_id, rendered_subject, rendered_body, leads(email)")
+    .select("id, lead_id, rendered_subject, rendered_body, leads(email, normalized_email)")
     .eq("campaign_id", campaignId)
-    .eq("workspace_id", workspace.workspace_id);
+    .eq("workspace_id", workspaceId);
 
   if (recError) throw recError;
   if (!recipients || recipients.length === 0) {
-    throw new Error("Cannot approve campaign with no recipients");
+    throw new Error("Cannot approve campaign with no recipients.");
   }
 
-  // 3. Verify rendered emails exist and validate against suppressed leads
+  // 3. Filter workspace suppressed emails
   const { data: suppressed } = await supabase
     .from("lead_suppression")
     .select("email")
-    .eq("workspace_id", workspace.workspace_id);
-    
-  const suppressedEmails = new Set(suppressed?.map(s => s.email.toLowerCase()) || []);
+    .eq("workspace_id", workspaceId);
 
-  const validRecipientsToUpdate = [];
-  const invalidRecipientsToStop = [];
+  const suppressedEmails = new Set(suppressed?.map((s) => s.email.toLowerCase().trim()) || []);
+
+  const validRecipientsToQueue = [];
+  const stoppedRecipientIds = [];
+  const seenLeadsInCampaign = new Set<string>();
 
   for (const rec of recipients) {
     const lead = Array.isArray(rec.leads) ? rec.leads[0] : rec.leads;
+    const leadEmail = lead?.normalized_email || lead?.email?.toLowerCase().trim();
+
+    if (!leadEmail) continue;
+
+    // Prevent duplicate recipients inside the same campaign
+    if (seenLeadsInCampaign.has(leadEmail)) {
+      stoppedRecipientIds.push(rec.id);
+      continue;
+    }
+    seenLeadsInCampaign.add(leadEmail);
 
     if (!rec.rendered_subject || !rec.rendered_body) {
-      throw new Error(`Recipient ${lead?.email} is missing rendered templates. Please regenerate previews.`);
+      throw new Error(`Recipient ${leadEmail} is missing rendered email. Please regenerate previews.`);
     }
 
-    if (suppressedEmails.has(lead?.email?.toLowerCase())) {
-      invalidRecipientsToStop.push(rec.id);
+    if (suppressedEmails.has(leadEmail)) {
+      stoppedRecipientIds.push(rec.id);
     } else {
-      validRecipientsToUpdate.push(rec);
+      validRecipientsToQueue.push({ rec, leadEmail });
     }
   }
 
-  if (validRecipientsToUpdate.length === 0) {
-    throw new Error("All recipients are suppressed. Cannot approve empty campaign.");
+  if (validRecipientsToQueue.length === 0) {
+    throw new Error("All recipients are suppressed or invalid. Cannot launch empty campaign.");
   }
 
-  // 4. Update suppressed recipients
-  if (invalidRecipientsToStop.length > 0) {
+  // 4. Mark suppressed / duplicate recipients as stopped
+  if (stoppedRecipientIds.length > 0) {
     await supabase
       .from("campaign_recipients")
       .update({
         status: "stopped",
-        stop_reason: "Suppressed lead",
-        stopped_at: new Date().toISOString()
+        stop_reason: "Suppressed lead or duplicate in campaign",
+        stopped_at: new Date().toISOString(),
       })
-      .in("id", invalidRecipientsToStop);
+      .in("id", stoppedRecipientIds);
   }
 
-  // 5. Freeze snapshots and queue jobs for valid recipients
-  const jobsToQueue = [];
-  const idempotencyPrefix = crypto.randomUUID();
-  
-  for (const rec of validRecipientsToUpdate) {
-    // 5a. Freeze snapshot and change recipient status to queued
+  // 5. Freeze snapshots and queue jobs
+  const jobsToInsert = [];
+  for (const item of validRecipientsToQueue) {
+    const rec = item.rec;
+
     await supabase
       .from("campaign_recipients")
       .update({
         status: "queued",
         approved_snapshot: {
           subject: rec.rendered_subject,
-          body: rec.rendered_body
-        }
+          body: rec.rendered_body,
+        },
       })
       .eq("id", rec.id);
 
-    // 5b. Prepare email job
-    jobsToQueue.push({
-      workspace_id: workspace.workspace_id,
+    jobsToInsert.push({
+      workspace_id: workspaceId,
       campaign_recipient_id: rec.id,
       status: "queued",
       attempt_count: 0,
-      scheduled_at: new Date().toISOString(), // schedule immediately
-      idempotency_key: `${idempotencyPrefix}-${rec.id}`
+      scheduled_at: new Date().toISOString(),
+      idempotency_key: `job-campaign-${campaignId}-recipient-${rec.id}`,
     });
   }
 
-  // Insert jobs
-  if (jobsToQueue.length > 0) {
+  // Batch insert jobs with onConflict ignore to prevent duplicate creation
+  if (jobsToInsert.length > 0) {
     const { error: jobsError } = await supabase
       .from("email_jobs")
-      .insert(jobsToQueue);
-      
+      .upsert(jobsToInsert, { onConflict: "idempotency_key", ignoreDuplicates: true });
+
     if (jobsError) throw new Error("Failed to queue email jobs: " + jobsError.message);
   }
 
-  // 6. Update Campaign Status
-  // Auth bypassed, user is null
-  const userId = null;
-
+  // 6. Optimistic update of campaign status
   const { error: updateCampError } = await supabase
     .from("campaigns")
     .update({
       status: "approved",
       approved_at: new Date().toISOString(),
-      approved_by: userId,
     })
-    .eq("id", campaignId);
+    .eq("id", campaignId)
+    .in("status", ["draft", "ready"]);
 
   if (updateCampError) throw updateCampError;
 
-  // 7. Write Activity Log
-  await supabase.from("activity_logs").insert({
-    workspace_id: workspace.workspace_id,
-    user_id: userId,
-    action: "campaign_approved",
-    details: {
+  // 7. Audit log
+  try {
+    const { logActivity } = await import("@/lib/activity");
+    await logActivity("campaign_approved", {
       campaign_id: campaignId,
-      total_approved: validRecipientsToUpdate.length,
-      total_suppressed: invalidRecipientsToStop.length
-    }
-  });
+      queued_count: validRecipientsToQueue.length,
+      suppressed_count: stoppedRecipientIds.length,
+    });
+  } catch {
+    // Non-blocking
+  }
 
   revalidatePath(`/dashboard/campaigns/${campaignId}`);
   revalidatePath(`/dashboard/campaigns/${campaignId}/review`);
-  
-  return { success: true };
+
+  return { success: true, queuedCount: validRecipientsToQueue.length };
 }
