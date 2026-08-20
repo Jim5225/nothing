@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/worker/process-emails",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/worker/sync-replies",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}
