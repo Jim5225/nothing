@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +30,7 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
   const [isTesting, setIsTesting] = useState(false);
 
   const [approveOpen, setApproveOpen] = useState(false);
+  const isApprovingRef = useRef(false);
 
   const handleRegenerate = async () => {
     if (!confirm("This will overwrite any manual edits made to subject/body. Continue?")) return;
@@ -98,10 +99,13 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
   };
 
   const handleApprove = async () => {
+    if (isApprovingRef.current) return;
+    
+    isApprovingRef.current = true;
     setIsApproving(true);
     try {
       const result = await approveCampaign(campaign.id);
-      if (!result.success) {
+      if (result && !result.success) {
         alert(`Approval failed: ${result.error}`);
       } else {
         alert("Campaign approved successfully!");
@@ -112,6 +116,7 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
       alert(`Approval failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     } finally {
       setIsApproving(false);
+      isApprovingRef.current = false;
     }
   };
 
