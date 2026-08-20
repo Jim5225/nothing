@@ -43,11 +43,17 @@ export default async function CampaignDashboardPage(props: {
 
   let jobs: { status: string; job_type: string }[] = [];
   if (recipientIds.length > 0) {
-    const { data: jobData } = await supabase
-      .from("email_jobs")
-      .select("status, job_type")
-      .in("campaign_recipient_id", recipientIds);
-    jobs = jobData || [];
+    const chunkSize = 200;
+    for (let i = 0; i < recipientIds.length; i += chunkSize) {
+      const chunk = recipientIds.slice(i, i + chunkSize);
+      const { data: jobData } = await supabase
+        .from("email_jobs")
+        .select("status, job_type")
+        .in("campaign_recipient_id", chunk);
+      if (jobData) {
+        jobs.push(...jobData);
+      }
+    }
   }
 
   const total = recipientList.length;
@@ -57,15 +63,17 @@ export default async function CampaignDashboardPage(props: {
   
   const pending = pendingJobs.filter(j => j.job_type === "initial").length + recipientList.filter((r) => r.status === "pending" || r.status === "ready").length;
   const processing = jobs.filter((j) => j.status === "processing").length;
-  const sent = recipientList.filter((r) => r.status === "sent" && r.follow_up_step === 0).length;
-  const followUpSent = recipientList.filter((r) => r.follow_up_step > 0).length;
+  const sent = jobs.filter((j) => j.job_type === "initial" && j.status === "sent").length;
+  const followUpSent = jobs.filter((j) => (j.job_type === "follow_up_1" || j.job_type === "follow_up_2") && j.status === "sent").length;
   const followUpDue = pendingJobs.filter(j => j.job_type === "follow_up_1" || j.job_type === "follow_up_2").length;
   
   const failed = recipientList.filter((r) => r.status === "failed" || r.status === "bounced").length;
   const cancelled = recipientList.filter((r) => r.status === "stopped").length + jobs.filter((j) => j.status === "cancelled").length;
   const replied = recipientList.filter((r) => r.status === "replied" || r.replied_at !== null).length;
   const unsubscribed = recipientList.filter((r) => r.status === "unsubscribed").length;
-  const noReply = sent + followUpSent; // Effectively those who have been contacted but haven't replied
+  
+  // noReply: Recipients who received at least one email, but haven't replied or unsubscribed
+  const noReply = recipientList.filter((r) => r.status === "sent" && r.replied_at === null).length;
 
   const stats = {
     total,

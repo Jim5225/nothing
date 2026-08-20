@@ -46,7 +46,7 @@ interface DashboardClientProps {
     status: string;
     follow_up_step: number;
     replied_at: string | null;
-    leads: any;
+    leads: { email?: string; full_name?: string } | { email?: string; full_name?: string }[] | null;
   })[];
   jobs?: Record<string, unknown>[];
 }

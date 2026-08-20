@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint app components lib proxy.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx lib/leads/__tests__/leads-pipeline.test.ts && tsx lib/email/__tests__/campaign-queue.test.ts"
+    "test": "tsx lib/leads/__tests__/leads-pipeline.test.ts && tsx lib/email/__tests__/campaign-queue.test.ts && tsx lib/email/__tests__/reply-sync.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.18.0",
