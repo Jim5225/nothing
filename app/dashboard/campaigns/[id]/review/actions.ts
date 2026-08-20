@@ -15,7 +15,7 @@ export async function generateSnapshots(campaignId: string) {
   // Fetch campaign and template
   const { data: campaign, error: campError } = await supabase
     .from("campaigns")
-    .select("*, email_templates(*)")
+    .select("*, email_templates:template_id(*)")
     .eq("id", campaignId)
     .eq("workspace_id", workspace.workspace_id)
     .single();
@@ -120,7 +120,7 @@ export async function sendTestEmail(campaignId: string, testEmailAddress: string
 
   const { data: campaign, error: campError } = await supabase
     .from("campaigns")
-    .select("email_account_id, email_templates(*)")
+    .select("email_account_id, email_templates:template_id(*)")
     .eq("id", campaignId)
     .eq("workspace_id", workspace.workspace_id)
     .single();
@@ -183,7 +183,7 @@ export async function approveCampaign(campaignId: string) {
     // 1. Fetch Campaign and Account
     const { data: campaign, error: campError } = await supabase
       .from("campaigns")
-      .select("*, email_accounts(status)")
+      .select("*, email_accounts(status), email_templates:template_id(*)")
       .eq("id", campaignId)
       .eq("workspace_id", workspaceId)
       .single();
@@ -199,7 +199,7 @@ export async function approveCampaign(campaignId: string) {
     // 2. Fetch recipients and ensure rendered subject/body exist
     const { data: recipients, error: recError } = await supabase
       .from("campaign_recipients")
-      .select("id, lead_id, rendered_subject, rendered_body, leads(email, normalized_email)")
+      .select("id, lead_id, rendered_subject, rendered_body, leads(*)")
       .eq("campaign_id", campaignId)
       .eq("workspace_id", workspaceId);
 
@@ -220,6 +220,10 @@ export async function approveCampaign(campaignId: string) {
     const stoppedRecipientIds = [];
     const seenLeadsInCampaign = new Set<string>();
 
+    const template = Array.isArray(campaign.email_templates)
+      ? campaign.email_templates[0]
+      : campaign.email_templates;
+
     for (const rec of recipients) {
       const lead = Array.isArray(rec.leads) ? rec.leads[0] : rec.leads;
       const leadEmail = lead?.normalized_email || lead?.email?.toLowerCase().trim();
@@ -233,14 +237,46 @@ export async function approveCampaign(campaignId: string) {
       }
       seenLeadsInCampaign.add(leadEmail);
 
-      if (!rec.rendered_subject || !rec.rendered_body) {
-        return { success: false, error: `Recipient ${leadEmail} is missing rendered email. Please regenerate previews.` };
+      let renderedSubject = rec.rendered_subject;
+      let renderedBody = rec.rendered_body;
+
+      // Automatically render template if not already rendered
+      if ((!renderedSubject || !renderedBody) && template) {
+        const variables = {
+          first_name: lead?.first_name || "",
+          last_name: lead?.last_name || "",
+          full_name: lead?.full_name || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || leadEmail,
+          company_name: lead?.company_name || "",
+          job_title: lead?.job_title || "",
+          website: lead?.website_url || "",
+          booking_link: campaign.booking_url || "",
+          sender_name: campaign.sender_name || "",
+          sender_email: "",
+        };
+
+        renderedSubject = renderTemplate(template.subject || "", variables);
+        renderedBody = renderTemplate(template.body || "", variables);
+
+        await supabase
+          .from("campaign_recipients")
+          .update({
+            rendered_subject: renderedSubject,
+            rendered_body: renderedBody,
+          })
+          .eq("id", rec.id);
+      }
+
+      if (!renderedSubject || !renderedBody) {
+        return { success: false, error: `Recipient ${leadEmail} is missing template preview. Please configure template.` };
       }
 
       if (suppressedEmails.has(leadEmail)) {
         stoppedRecipientIds.push(rec.id);
       } else {
-        validRecipientsToQueue.push({ rec, leadEmail });
+        validRecipientsToQueue.push({ 
+          rec: { ...rec, rendered_subject: renderedSubject, rendered_body: renderedBody }, 
+          leadEmail 
+        });
       }
     }
 

@@ -144,7 +144,7 @@ export async function getCampaignDetails(id: string) {
     .from("campaigns")
     .select(`
       *,
-      email_templates (*)
+      email_templates:template_id (*)
     `)
     .eq("id", id)
     .eq("workspace_id", workspace.workspace_id)
