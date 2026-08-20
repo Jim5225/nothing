@@ -30,7 +30,10 @@ export function EmailClient({ initialAccounts }: { initialAccounts: EmailAccount
 
     setIsProcessing(id);
     try {
-      await disconnectEmailAccount(id);
+      const result = await disconnectEmailAccount(id);
+      if (result && !result.success) {
+        alert("Failed to disconnect account: " + result.error);
+      }
     } catch (error) {
       console.error(error);
       alert("Failed to disconnect account.");

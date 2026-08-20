@@ -44,13 +44,13 @@ export async function createCampaignDraft(payload: {
   follow_up_2?: { subject: string; body: string; delay_days: number };
 }) {
   const workspace = await getCurrentWorkspace();
-  if (!workspace) throw new Error("Unauthorized");
+  if (!workspace) return { success: false, error: "Unauthorized" };
   const workspaceId = workspace.workspace_id;
 
   const supabase = await createClient();
 
   if (!payload.name || payload.leadIds.length === 0 || !payload.subject || !payload.body) {
-    throw new Error("Missing required fields");
+    return { success: false, error: "Missing required fields" };
   }
 
   // 1. Create the templates (Initial + Follow-ups)
@@ -86,7 +86,7 @@ export async function createCampaignDraft(payload: {
     .insert(templatesToInsert)
     .select("id, name");
 
-  if (templatesError || !insertedTemplates) throw templatesError;
+  if (templatesError || !insertedTemplates) return { success: false, error: templatesError?.message || "Failed to create templates" };
 
   const initialTemplateId = insertedTemplates.find(t => t.name === `${payload.name} Template`)?.id;
   const f1TemplateId = insertedTemplates.find(t => t.name === `${payload.name} Follow-Up 1`)?.id;
@@ -110,7 +110,7 @@ export async function createCampaignDraft(payload: {
     .select()
     .single();
 
-  if (campaignError) throw campaignError;
+  if (campaignError) return { success: false, error: campaignError.message };
 
   // 3. Create campaign recipients
   const recipients = payload.leadIds.map((leadId) => ({
@@ -124,13 +124,13 @@ export async function createCampaignDraft(payload: {
     .from("campaign_recipients")
     .insert(recipients);
 
-  if (recipientsError) throw recipientsError;
+  if (recipientsError) return { success: false, error: recipientsError.message };
 
   const { logActivity } = await import("@/lib/activity");
   await logActivity("campaign_created", { campaign_id: campaign.id, name: campaign.name });
 
   revalidatePath("/dashboard/campaigns");
-  return campaign.id;
+  return { success: true, campaignId: campaign.id };
 }
 
 export async function getCampaignDetails(id: string) {

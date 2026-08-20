@@ -319,7 +319,7 @@ export async function deleteSelectedLeads(leadIds: string[]) {
   if (!leadIds || leadIds.length === 0) return { success: true, count: 0 };
 
   const workspace = await getCurrentWorkspace();
-  if (!workspace) throw new Error("Unauthorized");
+  if (!workspace) return { success: false, error: "Unauthorized" };
 
   const supabase = await createClient();
 
@@ -329,7 +329,7 @@ export async function deleteSelectedLeads(leadIds: string[]) {
     .in("id", leadIds)
     .eq("workspace_id", workspace.workspace_id);
 
-  if (error) throw error;
+  if (error) return { success: false, error: error.message };
 
   try {
     const { logActivity } = await import("@/lib/activity");
@@ -347,7 +347,7 @@ export async function deleteSelectedLeads(leadIds: string[]) {
 
 export async function deleteAllLeads() {
   const workspace = await getCurrentWorkspace();
-  if (!workspace) throw new Error("Unauthorized");
+  if (!workspace) return { success: false, error: "Unauthorized" };
 
   const supabase = await createClient();
 
@@ -356,7 +356,7 @@ export async function deleteAllLeads() {
     .delete({ count: "exact" })
     .eq("workspace_id", workspace.workspace_id);
 
-  if (error) throw error;
+  if (error) return { success: false, error: error.message };
 
   try {
     const { logActivity } = await import("@/lib/activity");

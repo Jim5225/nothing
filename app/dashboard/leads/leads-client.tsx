@@ -88,9 +88,13 @@ export function LeadsClient({
 
     setIsDeleting(true);
     try {
-      await deleteSelectedLeads(selectedLeads);
-      setSelectedLeads([]);
-      router.refresh();
+      const result = await deleteSelectedLeads(selectedLeads);
+      if (!result.success) {
+        alert("Failed to delete selected leads: " + result.error);
+      } else {
+        setSelectedLeads([]);
+        router.refresh();
+      }
     } catch (err) {
       console.error(err);
       alert("Failed to delete selected leads.");
@@ -112,9 +116,14 @@ export function LeadsClient({
 
     setIsDeleting(true);
     try {
-      await deleteAllLeads();
-      setSelectedLeads([]);
-      router.refresh();
+      const result = await deleteAllLeads();
+      if (!result.success) {
+        alert("Failed to delete all leads: " + result.error);
+      } else {
+        alert(`Successfully deleted ${totalCount} leads.`);
+        setSelectedLeads([]);
+        router.refresh();
+      }
     } catch (err) {
       console.error(err);
       alert("Failed to delete all leads.");

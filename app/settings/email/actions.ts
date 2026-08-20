@@ -25,7 +25,7 @@ export async function getEmailAccounts() {
 
 export async function disconnectEmailAccount(accountId: string) {
   const workspace = await getCurrentWorkspace();
-  if (!workspace) throw new Error("Unauthorized");
+  if (!workspace) return { success: false, error: "Unauthorized" };
 
   const supabase = await createClient();
 
@@ -35,8 +35,9 @@ export async function disconnectEmailAccount(accountId: string) {
     .eq("id", accountId)
     .eq("workspace_id", workspace.workspace_id);
 
-  if (error) throw error;
+  if (error) return { success: false, error: error.message };
 
   await logActivity("gmail_disconnected", { account_id: accountId });
   revalidatePath("/settings/email");
+  return { success: true };
 }

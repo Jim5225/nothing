@@ -8,7 +8,7 @@ import { GmailProvider } from "@/lib/email/gmail-provider";
 
 export async function generateSnapshots(campaignId: string) {
   const workspace = await getCurrentWorkspace();
-  if (!workspace) throw new Error("Unauthorized");
+  if (!workspace) return { success: false, error: "Unauthorized" };
 
   const supabase = await createClient();
 
@@ -20,10 +20,10 @@ export async function generateSnapshots(campaignId: string) {
     .eq("workspace_id", workspace.workspace_id)
     .single();
 
-  if (campError || !campaign) throw new Error("Campaign not found");
-  if (!campaign.email_templates) throw new Error("Template not found");
+  if (campError || !campaign) return { success: false, error: "Campaign not found" };
+  if (!campaign.email_templates) return { success: false, error: "Template not found" };
   if (campaign.status !== "draft" && campaign.status !== "ready") {
-    throw new Error("Cannot modify snapshots after campaign is approved.");
+    return { success: false, error: "Cannot modify snapshots after campaign is approved." };
   }
 
   // Fetch pending recipients with leads
@@ -33,7 +33,7 @@ export async function generateSnapshots(campaignId: string) {
     .eq("campaign_id", campaignId)
     .eq("workspace_id", workspace.workspace_id);
 
-  if (recError) throw recError;
+  if (recError) return { success: false, error: recError.message };
 
   // Process all recipients
   for (const rec of recipients) {
@@ -65,11 +65,12 @@ export async function generateSnapshots(campaignId: string) {
   }
 
   revalidatePath(`/dashboard/campaigns/${campaignId}/review`);
+  return { success: true };
 }
 
 export async function removeRecipient(recipientId: string, campaignId: string) {
   const workspace = await getCurrentWorkspace();
-  if (!workspace) throw new Error("Unauthorized");
+  if (!workspace) return { success: false, error: "Unauthorized" };
 
   const supabase = await createClient();
 
@@ -80,7 +81,7 @@ export async function removeRecipient(recipientId: string, campaignId: string) {
     .single();
 
   if (campaign && campaign.status !== "draft" && campaign.status !== "ready") {
-    throw new Error("Cannot remove recipients after campaign approval.");
+    return { success: false, error: "Cannot remove recipients after campaign approval." };
   }
 
   const { error } = await supabase
@@ -89,13 +90,14 @@ export async function removeRecipient(recipientId: string, campaignId: string) {
     .eq("id", recipientId)
     .eq("workspace_id", workspace.workspace_id);
 
-  if (error) throw error;
+  if (error) return { success: false, error: error.message };
   revalidatePath(`/dashboard/campaigns/${campaignId}/review`);
+  return { success: true };
 }
 
 export async function updateCampaignSender(campaignId: string, emailAccountId: string) {
   const workspace = await getCurrentWorkspace();
-  if (!workspace) throw new Error("Unauthorized");
+  if (!workspace) return { success: false, error: "Unauthorized" };
 
   const supabase = await createClient();
 
@@ -105,13 +107,14 @@ export async function updateCampaignSender(campaignId: string, emailAccountId: s
     .eq("id", campaignId)
     .eq("workspace_id", workspace.workspace_id);
 
-  if (error) throw error;
+  if (error) return { success: false, error: error.message };
   revalidatePath(`/dashboard/campaigns/${campaignId}/review`);
+  return { success: true };
 }
 
 export async function sendTestEmail(campaignId: string, testEmailAddress: string) {
   const workspace = await getCurrentWorkspace();
-  if (!workspace) throw new Error("Unauthorized");
+  if (!workspace) return { success: false, error: "Unauthorized" };
 
   const supabase = await createClient();
 
@@ -122,8 +125,8 @@ export async function sendTestEmail(campaignId: string, testEmailAddress: string
     .eq("workspace_id", workspace.workspace_id)
     .single();
 
-  if (campError || !campaign) throw new Error("Campaign not found");
-  if (!campaign.email_account_id) throw new Error("No connected Gmail account selected.");
+  if (campError || !campaign) return { success: false, error: "Campaign not found" };
+  if (!campaign.email_account_id) return { success: false, error: "No connected Gmail account selected." };
 
   const variables = {
     first_name: "Test",
@@ -164,7 +167,7 @@ export async function sendTestEmail(campaignId: string, testEmailAddress: string
  */
 export async function approveCampaign(campaignId: string) {
   const workspace = await getCurrentWorkspace();
-  if (!workspace) throw new Error("Unauthorized");
+  if (!workspace) return { success: false, error: "Unauthorized" };
   const workspaceId = workspace.workspace_id;
 
   const supabase = await createClient();

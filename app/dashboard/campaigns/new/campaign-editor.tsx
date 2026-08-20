@@ -93,8 +93,13 @@ export function CampaignEditor({ leads }: { leads: Lead[] }) {
         payload.follow_up_2 = { subject: f2Subject, body: f2Body, delay_days: f2Delay };
       }
 
-      const campaignId = await createCampaignDraft(payload);
-      router.push(`/dashboard/campaigns/${campaignId}`);
+      const result = await createCampaignDraft(payload);
+      if (result.success && result.campaignId) {
+        router.push(`/dashboard/campaigns/${result.campaignId}`);
+      } else {
+        alert("Failed to create campaign draft: " + result.error);
+        setIsSaving(false);
+      }
     } catch (error) {
       console.error(error);
       alert("Failed to create campaign draft.");

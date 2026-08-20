@@ -31,12 +31,17 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
 
   const [approveOpen, setApproveOpen] = useState(false);
 
-  const handleGenerateSnapshots = async () => {
+  const handleRegenerate = async () => {
+    if (!confirm("This will overwrite any manual edits made to subject/body. Continue?")) return;
     setIsGenerating(true);
     try {
-      await generateSnapshots(campaign.id);
+      const result = await generateSnapshots(campaign.id);
+      if (result && !result.success) {
+        alert("Failed to regenerate: " + result.error);
+      }
     } catch (error) {
       console.error(error);
+      alert("Failed to regenerate");
     } finally {
       setIsGenerating(false);
     }
@@ -61,7 +66,11 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
 
   const handleRemoveRecipient = async (recipientId: string) => {
     try {
-      await removeRecipient(recipientId, campaign.id);
+      const result = await removeRecipient(recipientId, campaign.id);
+      if (result && !result.success) {
+        alert("Failed to remove: " + result.error);
+        return;
+      }
       if (selectedIndex >= recipients.length - 1) {
         setSelectedIndex(Math.max(0, recipients.length - 2));
       }
@@ -144,7 +153,7 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
         <div className="flex items-center gap-2.5 w-full sm:w-auto">
           <Button
             variant="outline"
-            onClick={() => handleGenerateSnapshots()}
+            onClick={() => handleRegenerate()}
             disabled={isGenerating || isApproved}
             className="bg-white hover:bg-slate-50 text-slate-700 border-slate-200 font-medium shadow-xs"
           >
