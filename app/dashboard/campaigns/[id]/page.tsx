@@ -34,7 +34,7 @@ export default async function CampaignDashboardPage(props: {
   // 2. Aggregate Stats from campaign_recipients and email_jobs
   const { data: recipients } = await supabase
     .from("campaign_recipients")
-    .select("id, status, status_detail, replied_at, follow_up_step")
+    .select("id, status, status_detail, replied_at, follow_up_step, leads(email, full_name)")
     .eq("campaign_id", params.id)
     .eq("workspace_id", workspace.workspace_id);
 
@@ -83,7 +83,7 @@ export default async function CampaignDashboardPage(props: {
 
   return (
     <div className="flex flex-col gap-6 max-w-5xl mx-auto w-full">
-      <DashboardClient campaign={campaign} stats={stats} />
+      <DashboardClient campaign={campaign} stats={stats} recipientList={recipientList} jobs={jobs} />
     </div>
   );
 }

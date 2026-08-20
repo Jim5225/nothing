@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,6 +18,22 @@ interface Lead {
   company_name?: string;
 }
 
+const VariableBadges = ({ onClick }: { onClick: (v: string) => void }) => (
+  <div className="bg-gray-50 border-b px-3 py-2 flex flex-wrap gap-2 items-center">
+    <span className="text-xs font-medium text-gray-500 mr-2">Insert:</span>
+    {SUPPORTED_VARIABLES.map((v) => (
+      <Badge 
+        key={v} 
+        variant="outline" 
+        className="cursor-pointer hover:bg-gray-200 transition-colors bg-white font-mono text-[10px]"
+        onClick={() => onClick(`{{${v}}}`)}
+      >
+        {v}
+      </Badge>
+    ))}
+  </div>
+);
+
 export function CampaignEditor({ leads }: { leads: Lead[] }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -28,27 +44,15 @@ export function CampaignEditor({ leads }: { leads: Lead[] }) {
   const [selectedLeads, setSelectedLeads] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [f1Enabled, setF1Enabled] = useState(false);
+  const [f1Subject, setF1Subject] = useState("");
+  const [f1Body, setF1Body] = useState("");
+  const [f1Delay, setF1Delay] = useState(3);
 
-  const insertVariable = (variable: string) => {
-    const textToInsert = `{{${variable}}}`;
-    if (!textareaRef.current) {
-      setBody((prev) => prev + textToInsert);
-      return;
-    }
-    
-    const textarea = textareaRef.current;
-    const start = typeof textarea.selectionStart === "number" ? textarea.selectionStart : body.length;
-    const end = typeof textarea.selectionEnd === "number" ? textarea.selectionEnd : body.length;
-    
-    const newBody = body.substring(0, start) + textToInsert + body.substring(end);
-    setBody(newBody);
-    
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(start + textToInsert.length, start + textToInsert.length);
-    }, 0);
-  };
+  const [f2Enabled, setF2Enabled] = useState(false);
+  const [f2Subject, setF2Subject] = useState("");
+  const [f2Body, setF2Body] = useState("");
+  const [f2Delay, setF2Delay] = useState(4);
 
   const toggleAllLeads = () => {
     if (selectedLeads.length === leads.length) {
@@ -72,14 +76,24 @@ export function CampaignEditor({ leads }: { leads: Lead[] }) {
 
     setIsSaving(true);
     try {
-      const campaignId = await createCampaignDraft({
+      const payload: Parameters<typeof createCampaignDraft>[0] = {
         name,
         subject,
         body,
         booking_url: bookingUrl,
         sender_name: senderName,
         leadIds: selectedLeads,
-      });
+      };
+
+      if (f1Enabled && f1Subject && f1Body) {
+        payload.follow_up_1 = { subject: f1Subject, body: f1Body, delay_days: f1Delay };
+      }
+      
+      if (f2Enabled && f2Subject && f2Body) {
+        payload.follow_up_2 = { subject: f2Subject, body: f2Body, delay_days: f2Delay };
+      }
+
+      const campaignId = await createCampaignDraft(payload);
       router.push(`/dashboard/campaigns/${campaignId}`);
     } catch (error) {
       console.error(error);
@@ -130,7 +144,7 @@ export function CampaignEditor({ leads }: { leads: Lead[] }) {
 
         <Card>
           <CardHeader>
-            <CardTitle>Email Template</CardTitle>
+            <CardTitle>Initial Email Template</CardTitle>
             <CardDescription>Use variables to personalize your outreach.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -150,31 +164,92 @@ export function CampaignEditor({ leads }: { leads: Lead[] }) {
                 <span className="text-xs text-gray-500">{body.length} chars</span>
               </div>
               <div className="border rounded-md overflow-hidden flex flex-col">
-                <div className="bg-gray-50 border-b px-3 py-2 flex flex-wrap gap-2 items-center">
-                  <span className="text-xs font-medium text-gray-500 mr-2">Insert:</span>
-                  {SUPPORTED_VARIABLES.map((v) => (
-                    <Badge 
-                      key={v} 
-                      variant="outline" 
-                      className="cursor-pointer hover:bg-gray-200 transition-colors bg-white font-mono text-[10px]"
-                      onClick={() => insertVariable(v)}
-                    >
-                      {v}
-                    </Badge>
-                  ))}
-                </div>
+                <VariableBadges onClick={(v) => setBody(prev => prev + v)} />
                 <textarea
                   id="body"
-                  ref={textareaRef}
                   value={body}
                   onChange={(e) => setBody(e.target.value)}
                   placeholder="Hi {{first_name}},&#10;&#10;I noticed you're at {{company_name}}..."
-                  className="min-h-[300px] w-full p-4 focus:outline-none resize-y"
+                  className="min-h-[250px] w-full p-4 focus:outline-none resize-y"
                 />
               </div>
             </div>
           </CardContent>
         </Card>
+
+        {/* Follow Up 1 */}
+        <Card className={f1Enabled ? "border-purple-200 shadow-sm" : "border-dashed"}>
+          <CardHeader className="py-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Follow-Up #1</CardTitle>
+                <CardDescription className="text-xs mt-1">Send automatically if no reply.</CardDescription>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox id="enable-f1" checked={f1Enabled} onCheckedChange={(c) => { setF1Enabled(!!c); if(!c) setF2Enabled(false); }} />
+                <Label htmlFor="enable-f1" className="cursor-pointer">Enable</Label>
+              </div>
+            </div>
+          </CardHeader>
+          {f1Enabled && (
+            <CardContent className="space-y-4 pt-0">
+              <div className="flex items-center gap-3 bg-slate-50 p-3 rounded border">
+                <Label className="whitespace-nowrap">Wait</Label>
+                <Input type="number" min="1" max="30" value={f1Delay} onChange={e => setF1Delay(Number(e.target.value) || 3)} className="w-20 h-8" />
+                <Label className="whitespace-nowrap">days after initial email</Label>
+              </div>
+              <div className="space-y-2">
+                <Label>Subject <span className="text-red-500">*</span></Label>
+                <Input value={f1Subject} onChange={e => setF1Subject(e.target.value)} placeholder="Re: Quick question regarding {{company_name}}" />
+              </div>
+              <div className="space-y-2">
+                <Label>Email Body <span className="text-red-500">*</span></Label>
+                <div className="border rounded-md overflow-hidden flex flex-col">
+                  <VariableBadges onClick={(v) => setF1Body(prev => prev + v)} />
+                  <textarea value={f1Body} onChange={e => setF1Body(e.target.value)} placeholder="Just following up on my previous email..." className="min-h-[150px] w-full p-4 focus:outline-none resize-y" />
+                </div>
+              </div>
+            </CardContent>
+          )}
+        </Card>
+
+        {/* Follow Up 2 */}
+        {f1Enabled && (
+          <Card className={f2Enabled ? "border-purple-200 shadow-sm" : "border-dashed"}>
+            <CardHeader className="py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base">Follow-Up #2</CardTitle>
+                  <CardDescription className="text-xs mt-1">Final follow-up if still no reply.</CardDescription>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox id="enable-f2" checked={f2Enabled} onCheckedChange={(c) => setF2Enabled(!!c)} />
+                  <Label htmlFor="enable-f2" className="cursor-pointer">Enable</Label>
+                </div>
+              </div>
+            </CardHeader>
+            {f2Enabled && (
+              <CardContent className="space-y-4 pt-0">
+                <div className="flex items-center gap-3 bg-slate-50 p-3 rounded border">
+                  <Label className="whitespace-nowrap">Wait</Label>
+                  <Input type="number" min="1" max="30" value={f2Delay} onChange={e => setF2Delay(Number(e.target.value) || 4)} className="w-20 h-8" />
+                  <Label className="whitespace-nowrap">days after Follow-Up #1</Label>
+                </div>
+                <div className="space-y-2">
+                  <Label>Subject <span className="text-red-500">*</span></Label>
+                  <Input value={f2Subject} onChange={e => setF2Subject(e.target.value)} placeholder="Any thoughts?" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Email Body <span className="text-red-500">*</span></Label>
+                  <div className="border rounded-md overflow-hidden flex flex-col">
+                    <VariableBadges onClick={(v) => setF2Body(prev => prev + v)} />
+                    <textarea value={f2Body} onChange={e => setF2Body(e.target.value)} placeholder="One last attempt to reach out..." className="min-h-[150px] w-full p-4 focus:outline-none resize-y" />
+                  </div>
+                </div>
+              </CardContent>
+            )}
+          </Card>
+        )}
       </div>
 
       <div className="space-y-6">
@@ -225,9 +300,9 @@ export function CampaignEditor({ leads }: { leads: Lead[] }) {
           </CardContent>
           <div className="p-4 border-t bg-gray-50 mt-auto">
             <Button 
-              className="w-full" 
+              className="w-full bg-purple-600 hover:bg-purple-700 text-white" 
               onClick={handleSave} 
-              disabled={isSaving || !name || selectedLeads.length === 0 || !subject || !body}
+              disabled={isSaving || !name || selectedLeads.length === 0 || !subject || !body || (f1Enabled && (!f1Subject || !f1Body)) || (f2Enabled && (!f2Subject || !f2Body))}
             >
               {isSaving ? "Saving..." : "Save Draft & Preview"}
             </Button>

@@ -164,7 +164,7 @@ export async function processLeadImport(
           continue;
         }
 
-        const existingLeadsMap = new Map((existingData || []).map((l: any) => [l.normalized_email, l]));
+        const existingLeadsMap = new Map((existingData || []).map(l => [l.normalized_email, l]));
         
         // Merge incoming records with existing records (non-destructive enrichment)
         const enrichedChunk = chunk.map(incomingLead => {
@@ -189,7 +189,6 @@ export async function processLeadImport(
           failedRows += chunk.length;
         } else {
           // Count newly imported vs updated duplicates
-          const insertedCount = inserted?.length || 0;
           let newInserts = 0;
           let updatedDupes = 0;
           

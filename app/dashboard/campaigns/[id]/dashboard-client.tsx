@@ -27,16 +27,13 @@ interface Stats {
   failed: number;
   cancelled: number;
   replied: number;
-  followUpDue?: number;
-  followUpSent?: number;
-  unsubscribed?: number;
-  noReply?: number;
+  followUpDue: number;
+  followUpSent: number;
+  unsubscribed: number;
+  noReply: number;
 }
 
-export function DashboardClient({
-  campaign,
-  stats,
-}: {
+interface DashboardClientProps {
   campaign: Record<string, unknown> & {
     id: string;
     name: string;
@@ -44,7 +41,17 @@ export function DashboardClient({
     email_accounts?: { email_address?: string };
   };
   stats: Stats;
-}) {
+  recipientList?: (Record<string, unknown> & {
+    id: string;
+    status: string;
+    follow_up_step: number;
+    replied_at: string | null;
+    leads: any;
+  })[];
+  jobs?: Record<string, unknown>[];
+}
+
+export function DashboardClient({ campaign, stats, recipientList = [] }: DashboardClientProps) {
   const router = useRouter();
   const [isProcessing, setIsProcessing] = useState(false);
   const [isTriggeringWorker, setIsTriggeringWorker] = useState(false);
@@ -175,7 +182,47 @@ export function DashboardClient({
         </div>
       </div>
 
-      {/* 7 Sending Progress Metrics Grid */}
+      {/* Rates Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-2">
+        <Card className="bg-white border-slate-200 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Reply Rate
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-slate-800">
+              {stats.total > 0 ? ((stats.replied / Math.max(stats.sent + stats.followUpSent + stats.replied + stats.unsubscribed, 1)) * 100).toFixed(1) : "0.0"}%
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="bg-white border-slate-200 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Failure Rate
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-slate-800">
+              {stats.total > 0 ? ((stats.failed / stats.total) * 100).toFixed(1) : "0.0"}%
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="bg-white border-slate-200 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Follow-Up Rate
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-slate-800">
+              {stats.total > 0 ? ((stats.followUpSent / Math.max(stats.sent + stats.followUpSent + stats.replied + stats.unsubscribed, 1)) * 100).toFixed(1) : "0.0"}%
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* 9 Sending Progress Metrics Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
         {/* Total */}
         <Card className="bg-slate-50/70 border-slate-200">
@@ -295,6 +342,51 @@ export function DashboardClient({
           <CardContent>
             <div className="text-2xl font-bold text-orange-700">{stats.cancelled}</div>
           </CardContent>
+        </Card>
+      </div>
+      
+      {/* Recipient Timeline Table */}
+      <div className="mt-8">
+        <h3 className="text-lg font-bold mb-4">Recipient Timeline</h3>
+        <Card>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-slate-50 border-b">
+                <tr>
+                  <th className="px-4 py-3 font-medium text-slate-500">Lead</th>
+                  <th className="px-4 py-3 font-medium text-slate-500">Email</th>
+                  <th className="px-4 py-3 font-medium text-slate-500">Status</th>
+                  <th className="px-4 py-3 font-medium text-slate-500">Follow-Up Step</th>
+                  <th className="px-4 py-3 font-medium text-slate-500">Replied At</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {recipientList.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-4 py-4 text-center text-slate-500">No recipients found.</td>
+                  </tr>
+                ) : (
+                  recipientList.map(r => (
+                    <tr key={r.id} className="hover:bg-slate-50">
+                      <td className="px-4 py-3 font-medium">
+                        {(Array.isArray(r.leads) ? r.leads[0]?.full_name : r.leads?.full_name) || "Unknown"}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {(Array.isArray(r.leads) ? r.leads[0]?.email : r.leads?.email) || "Unknown"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant="outline">{r.status}</Badge>
+                      </td>
+                      <td className="px-4 py-3">{r.follow_up_step}</td>
+                      <td className="px-4 py-3 text-slate-500">
+                        {r.replied_at ? new Date(r.replied_at).toLocaleString() : "-"}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </Card>
       </div>
     </div>

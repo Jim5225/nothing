@@ -40,6 +40,8 @@ export async function createCampaignDraft(payload: {
   booking_url?: string;
   sender_name?: string;
   leadIds: string[];
+  follow_up_1?: { subject: string; body: string; delay_days: number };
+  follow_up_2?: { subject: string; body: string; delay_days: number };
 }) {
   const workspace = await getCurrentWorkspace();
   if (!workspace) throw new Error("Unauthorized");
@@ -51,19 +53,44 @@ export async function createCampaignDraft(payload: {
     throw new Error("Missing required fields");
   }
 
-  // 1. Create the template
-  const { data: template, error: templateError } = await supabase
-    .from("email_templates")
-    .insert({
+  // 1. Create the templates (Initial + Follow-ups)
+  const templatesToInsert = [
+    {
       workspace_id: workspaceId,
       name: `${payload.name} Template`,
       subject: payload.subject,
       body: payload.body,
-    })
-    .select()
-    .single();
+    }
+  ];
 
-  if (templateError) throw templateError;
+  if (payload.follow_up_1) {
+    templatesToInsert.push({
+      workspace_id: workspaceId,
+      name: `${payload.name} Follow-Up 1`,
+      subject: payload.follow_up_1.subject,
+      body: payload.follow_up_1.body,
+    });
+  }
+
+  if (payload.follow_up_2) {
+    templatesToInsert.push({
+      workspace_id: workspaceId,
+      name: `${payload.name} Follow-Up 2`,
+      subject: payload.follow_up_2.subject,
+      body: payload.follow_up_2.body,
+    });
+  }
+
+  const { data: insertedTemplates, error: templatesError } = await supabase
+    .from("email_templates")
+    .insert(templatesToInsert)
+    .select("id, name");
+
+  if (templatesError || !insertedTemplates) throw templatesError;
+
+  const initialTemplateId = insertedTemplates.find(t => t.name === `${payload.name} Template`)?.id;
+  const f1TemplateId = insertedTemplates.find(t => t.name === `${payload.name} Follow-Up 1`)?.id;
+  const f2TemplateId = insertedTemplates.find(t => t.name === `${payload.name} Follow-Up 2`)?.id;
 
   // 2. Create the campaign
   const { data: campaign, error: campaignError } = await supabase
@@ -72,9 +99,13 @@ export async function createCampaignDraft(payload: {
       workspace_id: workspaceId,
       name: payload.name,
       status: "ready", // as per validation spec: can be ready if all required exist
-      template_id: template.id,
+      template_id: initialTemplateId,
       booking_url: payload.booking_url || null,
       sender_name: payload.sender_name || null,
+      follow_up_1_template_id: f1TemplateId || null,
+      follow_up_1_delay_days: payload.follow_up_1?.delay_days || null,
+      follow_up_2_template_id: f2TemplateId || null,
+      follow_up_2_delay_days: payload.follow_up_2?.delay_days || null,
     })
     .select()
     .single();
