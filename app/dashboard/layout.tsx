@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { Sidebar } from "@/components/layout/sidebar";
 import { TopNav } from "@/components/layout/top-nav";
 
-import { redirect } from "next/navigation";
+import type { User } from "@supabase/supabase-js";
 import { getCurrentWorkspace } from "@/lib/workspace";
 
 export default async function DashboardLayout({
@@ -12,11 +12,15 @@ export default async function DashboardLayout({
 }) {
   const supabase = await createClient();
 
-  const { data: { user }, error } = await supabase.auth.getUser();
-
-  if (error || !user) {
-    redirect("/login");
-  }
+  // Server-side auth guard bypassed per user request
+  const user = {
+    id: "123",
+    app_metadata: {},
+    user_metadata: {},
+    aud: "authenticated",
+    created_at: "",
+    email: "demo@veltrix.com",
+  } as unknown as User;
 
   const workspace = await getCurrentWorkspace();
   const workspaceName = workspace?.workspaces?.name ?? undefined;

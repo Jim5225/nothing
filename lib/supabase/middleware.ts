@@ -36,23 +36,16 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const { data: { user } } = await supabase.auth.getUser();
-
-  const { pathname } = request.nextUrl;
-
-  const isPublicRoute = pathname === "/" || pathname === "/login" || pathname === "/signup" || pathname.startsWith("/auth/");
-  
-  if (!user && !isPublicRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/login";
-    return NextResponse.redirect(url);
-  }
-
-  if (user && (pathname === "/" || pathname === "/login" || pathname === "/signup")) {
+  // We are completely bypassing auth checks per user request
+  // No redirects away from protected routes, anyone can view them.
+  if (pathname === "/") {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);
   }
+
+  // Auth pages are now accessible for testing
+  // (Removed the redirect to dashboard for /login and /signup)
 
   return supabaseResponse;
 }
