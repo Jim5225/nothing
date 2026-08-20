@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { GmailProvider } from "./gmail-provider";
+import { SendEmailOptions } from "./types";
 
 const MAX_RETRIES = 3;
 const BATCH_SIZE = 20;
