@@ -3,20 +3,28 @@ import { createClient } from "@/lib/supabase/server";
 export async function getCurrentWorkspace() {
   const supabase = await createClient();
 
-  // Completely bypassed user check to allow public access
-  // Fetch the first available workspace
-  const { data: workspace } = await supabase
-    .from("workspaces")
-    .select("id, name, slug")
-    .order("created_at", { ascending: true })
-    .limit(1)
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const { data: workspaceUser } = await supabase
+    .from("workspace_users")
+    .select(`
+      workspace_id,
+      role,
+      workspaces (
+        id,
+        name,
+        slug
+      )
+    `)
+    .eq("user_id", user.id)
     .single();
 
-  if (workspace) {
+  if (workspaceUser && workspaceUser.workspaces) {
     return {
-      workspace_id: workspace.id,
-      role: "owner",
-      workspaces: workspace,
+      workspace_id: workspaceUser.workspace_id,
+      role: workspaceUser.role,
+      workspaces: Array.isArray(workspaceUser.workspaces) ? workspaceUser.workspaces[0] : workspaceUser.workspaces,
     };
   }
 

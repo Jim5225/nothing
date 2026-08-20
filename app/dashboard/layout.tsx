@@ -3,6 +3,9 @@ import { Sidebar } from "@/components/layout/sidebar";
 import { TopNav } from "@/components/layout/top-nav";
 import type { User } from "@supabase/supabase-js";
 
+import { redirect } from "next/navigation";
+import { getCurrentWorkspace } from "@/lib/workspace";
+
 export default async function DashboardLayout({
   children,
 }: {
@@ -10,25 +13,14 @@ export default async function DashboardLayout({
 }) {
   const supabase = await createClient();
 
-  // Server-side auth guard bypassed per user request
-  const user = {
-    id: "123",
-    app_metadata: {},
-    user_metadata: {},
-    aud: "authenticated",
-    created_at: "",
-    email: "demo@veltrix.com",
-  } as unknown as User;
+  const { data: { user }, error } = await supabase.auth.getUser();
 
-  // Fetch the primary workspace (bypassing user check)
-  const { data: workspace } = await supabase
-    .from("workspaces")
-    .select("id, name, slug")
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .single();
+  if (error || !user) {
+    redirect("/login");
+  }
 
-  const workspaceName = workspace?.name ?? undefined;
+  const workspace = await getCurrentWorkspace();
+  const workspaceName = workspace?.workspaces?.name ?? undefined;
 
   return (
     <div className="flex min-h-screen bg-gray-50">
