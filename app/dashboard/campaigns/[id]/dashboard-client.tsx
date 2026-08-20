@@ -27,6 +27,10 @@ interface Stats {
   failed: number;
   cancelled: number;
   replied: number;
+  followUpDue?: number;
+  followUpSent?: number;
+  unsubscribed?: number;
+  noReply?: number;
 }
 
 export function DashboardClient({
@@ -230,6 +234,42 @@ export function DashboardClient({
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-indigo-700">{stats.replied}</div>
+          </CardContent>
+        </Card>
+
+        {/* Follow-up Due */}
+        <Card className="bg-yellow-50/50 border-yellow-100">
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-yellow-600">
+              <Clock className="w-3.5 h-3.5" /> Follow-Up Due
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-yellow-700">{stats.followUpDue}</div>
+          </CardContent>
+        </Card>
+
+        {/* Follow-up Sent */}
+        <Card className="bg-emerald-50/50 border-emerald-100">
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-emerald-600">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Follow-Up Sent
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-emerald-700">{stats.followUpSent}</div>
+          </CardContent>
+        </Card>
+
+        {/* Unsubscribed */}
+        <Card className="bg-rose-50/50 border-rose-100">
+          <CardHeader className="pb-2">
+            <CardDescription className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-rose-600">
+              <XCircle className="w-3.5 h-3.5" /> Unsubscribed
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-rose-700">{stats.unsubscribed}</div>
           </CardContent>
         </Card>
 

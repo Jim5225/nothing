@@ -3,11 +3,15 @@ export interface SendEmailOptions {
   subject: string;
   body: string;
   replyTo?: string;
+  threadId?: string;
+  inReplyToMessageId?: string;
+  references?: string;
 }
 
 export interface SendResult {
   success: boolean;
   messageId?: string;
+  threadId?: string;
   error?: string;
   isPermanentError?: boolean;
   isRateLimit?: boolean;

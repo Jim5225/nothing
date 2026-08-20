@@ -40,12 +40,18 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
     let pauseCampaign = false;
     let leadId: string | null = null;
     let leadStatus: string | null = null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let campaign: any = null;
 
     try {
-      // 2. Fetch full recipient + campaign + lead details
+      // 2. Fetch dependencies: recipient, campaign, and lead
       const { data: recipient, error: recError } = await supabase
         .from("campaign_recipients")
-        .select("*, campaigns(*), leads(*)")
+        .select(`
+          *,
+          campaigns (id, status, email_account_id, sender_name, follow_up_1_template_id, follow_up_1_delay_days, follow_up_2_template_id, follow_up_2_delay_days),
+          leads (id, email, first_name, last_name, full_name, company_name, job_title, website_url, status)
+        `)
         .eq("id", job.campaign_recipient_id)
         .single();
 
@@ -53,7 +59,7 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
         throw new Error("Recipient record not found");
       }
 
-      const campaign = recipient.campaigns;
+      campaign = recipient.campaigns;
       const lead = recipient.leads;
 
       if (lead) {
@@ -119,11 +125,51 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
         throw new Error(`Lead ${lead.email} is on the suppression list`);
       }
 
-      // Pre-Send Guard 6: Snapshot Verification
-      const snapshot = recipient.approved_snapshot;
-      if (!snapshot || !snapshot.subject || !snapshot.body) {
-        finalJobStatus = "failed";
-        throw new Error("Missing approved email snapshot (subject/body)");
+      // Pre-Send Guard 6: Snapshot Verification & Follow-up Rendering
+      let subjectToSend = "";
+      let bodyToSend = "";
+      
+      const jobType = job.job_type || "initial";
+      
+      if (jobType === "initial") {
+        const snapshot = recipient.approved_snapshot;
+        if (!snapshot || !snapshot.subject || !snapshot.body) {
+          finalJobStatus = "failed";
+          throw new Error("Missing approved email snapshot (subject/body)");
+        }
+        subjectToSend = snapshot.subject;
+        bodyToSend = snapshot.body;
+      } else {
+        // Follow-up rendering on the fly
+        let templateId = null;
+        if (jobType === "follow_up_1") templateId = campaign.follow_up_1_template_id;
+        else if (jobType === "follow_up_2") templateId = campaign.follow_up_2_template_id;
+        
+        if (!templateId) {
+          finalJobStatus = "cancelled";
+          throw new Error(`No template configured for ${jobType}`);
+        }
+        
+        const { data: template } = await supabase.from("email_templates").select("*").eq("id", templateId).single();
+        if (!template) {
+          finalJobStatus = "failed";
+          throw new Error("Follow-up template not found");
+        }
+        
+        const { renderTemplate } = await import("@/lib/template-renderer");
+        const variables = {
+          first_name: lead.first_name,
+          last_name: lead.last_name,
+          full_name: lead.full_name,
+          company_name: lead.company_name,
+          job_title: lead.job_title,
+          website: lead.website_url,
+          booking_link: campaign.booking_url,
+          sender_name: campaign.sender_name,
+          sender_email: "",
+        };
+        subjectToSend = renderTemplate(template.subject, variables);
+        bodyToSend = renderTemplate(template.body, variables);
       }
 
       // Transition campaign status to 'sending' if it was approved
@@ -139,16 +185,27 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
       const provider = new GmailProvider(campaign.email_account_id, supabase);
 
       // 4. Dispatch Email
-      const sendResult = await provider.sendEmail({
+      const sendOptions: SendEmailOptions = {
         to: lead.email,
-        subject: snapshot.subject,
-        body: snapshot.body,
-      });
+        subject: subjectToSend,
+        body: bodyToSend,
+      };
+      
+      if (jobType !== "initial" && recipient.provider_thread_id) {
+        sendOptions.threadId = recipient.provider_thread_id;
+      }
+
+      const sendResult = await provider.sendEmail(sendOptions);
 
       if (sendResult.success) {
         success = true;
         finalJobStatus = "sent";
         providerMessageId = sendResult.messageId || `msg_${crypto.randomUUID()}`;
+        
+        // Store thread ID if this is the initial email
+        if (jobType === "initial" && sendResult.threadId) {
+          await supabase.from("campaign_recipients").update({ provider_thread_id: sendResult.threadId }).eq("id", recipient.id);
+        }
       } else {
         if (sendResult.isPermanentError) {
           pauseCampaign = true;
@@ -166,13 +223,15 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
         errorMessage.includes("Campaign is not active") ||
         errorMessage.includes("Recipient is in terminal") ||
         errorMessage.includes("already replied") ||
-        errorMessage.includes("suppression list");
+        errorMessage.includes("suppression list") ||
+        errorMessage.includes("No template configured");
 
       const isPermanent =
         errorMessage.toLowerCase().includes("invalid_grant") ||
         errorMessage.toLowerCase().includes("authentication expired") ||
         errorMessage.toLowerCase().includes("missing approved email snapshot") ||
-        errorMessage.toLowerCase().includes("missing or invalid");
+        errorMessage.toLowerCase().includes("missing or invalid") ||
+        errorMessage.toLowerCase().includes("template not found");
 
       if (isCancellation) {
         finalJobStatus = "cancelled";
@@ -208,13 +267,24 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
 
     // 6. Update Recipient Record and Lead Status
     if (finalJobStatus === "sent") {
+      const recipientStatus = "sent";
+      const stepUpdate = job.job_type === "initial" ? 0 : (job.job_type === "follow_up_1" ? 1 : 2);
+      
+      const updatePayload: Record<string, string | number> = {
+        status: recipientStatus,
+        follow_up_step: stepUpdate,
+      };
+      
+      if (job.job_type === "initial") {
+        updatePayload.sent_at = new Date().toISOString();
+        updatePayload.delivered_at = new Date().toISOString();
+      } else {
+        updatePayload.follow_up_sent_at = new Date().toISOString();
+      }
+
       await supabase
         .from("campaign_recipients")
-        .update({
-          status: "sent",
-          sent_at: new Date().toISOString(),
-          delivered_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq("id", job.campaign_recipient_id);
 
       if (leadId && (!leadStatus || leadStatus === "new")) {
@@ -228,8 +298,30 @@ export async function processEmailQueue(customSupabaseClient?: SupabaseClient) {
         provider: "gmail",
         provider_event_id: providerMessageId,
         event_type: "sent",
-        event_data: { lead_id: leadId, sent_at: new Date().toISOString() },
+        event_data: { lead_id: leadId, sent_at: new Date().toISOString(), job_type: job.job_type },
       });
+      
+      // Schedule Next Follow Up if configured
+      if (job.job_type === "initial" && campaign?.follow_up_1_delay_days) {
+         await supabase.from("email_jobs").insert({
+           workspace_id: job.workspace_id,
+           campaign_recipient_id: job.campaign_recipient_id,
+           status: "queued",
+           job_type: "follow_up_1",
+           scheduled_at: new Date(Date.now() + campaign.follow_up_1_delay_days * 24 * 60 * 60 * 1000).toISOString(),
+           idempotency_key: `job-campaign-${campaign.id}-recipient-${job.campaign_recipient_id}-f1`,
+         });
+      } else if (job.job_type === "follow_up_1" && campaign?.follow_up_2_delay_days) {
+         await supabase.from("email_jobs").insert({
+           workspace_id: job.workspace_id,
+           campaign_recipient_id: job.campaign_recipient_id,
+           status: "queued",
+           job_type: "follow_up_2",
+           scheduled_at: new Date(Date.now() + campaign.follow_up_2_delay_days * 24 * 60 * 60 * 1000).toISOString(),
+           idempotency_key: `job-campaign-${campaign.id}-recipient-${job.campaign_recipient_id}-f2`,
+         });
+      }
+
     } else if (finalJobStatus === "failed") {
       await supabase
         .from("campaign_recipients")

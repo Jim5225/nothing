@@ -70,29 +70,50 @@ export async function processReplySync() {
           body = Buffer.from(msg.payload.body.data, "base64").toString("utf-8");
         }
 
-        // 3. Match against Leads
-        // We look for a lead with this email in the same workspace
-        const { data: lead } = await supabase
+        // 3. Match against Campaign Recipient via Thread ID
+        // The requirement is: "Never mark a lead as replied because of an unrelated email from the same address."
+        // We match strictly on the provider_thread_id.
+        let recipient = null;
+        let lead = null;
+        
+        if (threadId) {
+          const { data: recData } = await supabase
+            .from("campaign_recipients")
+            .select("id, campaign_id, status, lead_id")
+            .eq("provider_thread_id", threadId)
+            .eq("workspace_id", account.workspace_id)
+            .single();
+            
+          recipient = recData;
+        }
+
+        if (!recipient) continue; // Unrelated email or not from our campaign thread
+
+        // Fetch lead
+        const { data: leadData } = await supabase
           .from("leads")
-          .select("id, workspace_id, status")
-          .eq("workspace_id", account.workspace_id)
-          .eq("normalized_email", fromEmail)
+          .select("id, workspace_id, status, email")
+          .eq("id", recipient.lead_id)
           .single();
+          
+        lead = leadData;
+        if (!lead) continue;
 
-        if (!lead) continue; // Not a reply from a known lead
-
-        // 4. Find Active Campaign Recipient
-        // Order by created_at DESC to get the most recent outreach
-        const { data: recipient } = await supabase
-          .from("campaign_recipients")
-          .select("id, campaign_id, status")
-          .eq("lead_id", lead.id)
-          .eq("workspace_id", account.workspace_id)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .single();
-
-        if (!recipient) continue;
+        // Sentiment Detection
+        const bodyLower = body.toLowerCase();
+        let sentimentStatus = "replied"; 
+        let leadStatus = "replied";
+        
+        const unsubscribePhrases = ["unsubscribe", "remove me", "take me off", "stop emailing", "don't email"];
+        const positivePhrases = ["interested", "call me", "let's talk", "book", "tell me more", "send more info"];
+        
+        if (unsubscribePhrases.some(phrase => bodyLower.includes(phrase))) {
+           sentimentStatus = "unsubscribed";
+           leadStatus = "unsubscribed";
+        } else if (positivePhrases.some(phrase => bodyLower.includes(phrase))) {
+           sentimentStatus = "replied"; 
+           leadStatus = "interested"; // positive signal
+        }
 
         // 5. Insert Reply
         const { error: replyError } = await supabase
@@ -118,24 +139,29 @@ export async function processReplySync() {
 
         newReplies++;
 
-        // 6. Update Recipient Status -> 'replied' and stop further outreach
-        if (recipient.status !== "replied") {
+        // 6. Update Recipient Status & Cancel pending follow-ups
+        if (recipient.status !== "replied" && recipient.status !== "unsubscribed") {
           await supabase
             .from("campaign_recipients")
             .update({ 
-              status: "replied", 
+              status: sentimentStatus,
+              status_detail: leadStatus === "interested" ? "positive" : (sentimentStatus === "unsubscribed" ? "negative" : "neutral"),
               replied_at: new Date().toISOString() 
             })
             .eq("id", recipient.id);
 
-          // If there's an email job still queued, it won't send because processEmailQueue 
-          // explicitly checks that recipient.status must be 'queued' or 'sending'.
+          // Explicitly cancel pending email jobs for this recipient
+          await supabase
+            .from("email_jobs")
+            .update({ status: "cancelled", last_error: "Cancelled due to reply" })
+            .eq("campaign_recipient_id", recipient.id)
+            .eq("status", "queued");
 
-          // 7. Update Lead Status to 'replied' if it's not already something further
+          // 7. Update Lead Status
           if (lead.status !== "interested" && lead.status !== "meeting" && lead.status !== "won") {
             await supabase
               .from("leads")
-              .update({ status: "replied" })
+              .update({ status: leadStatus })
               .eq("id", lead.id)
               .eq("workspace_id", account.workspace_id);
           }
@@ -143,11 +169,12 @@ export async function processReplySync() {
           // 8. Log Activity
           await supabase.from("activity_logs").insert({
             workspace_id: account.workspace_id,
-            action: "reply_detected",
+            action: sentimentStatus === "unsubscribed" ? "unsubscribe_detected" : "reply_detected",
             details: {
               campaign_id: recipient.campaign_id,
               lead_id: lead.id,
-              from: fromEmail
+              from: fromEmail,
+              sentiment: leadStatus
             }
           });
         }

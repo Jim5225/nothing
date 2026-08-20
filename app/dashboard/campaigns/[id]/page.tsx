@@ -34,30 +34,38 @@ export default async function CampaignDashboardPage(props: {
   // 2. Aggregate Stats from campaign_recipients and email_jobs
   const { data: recipients } = await supabase
     .from("campaign_recipients")
-    .select("id, status, replied_at")
+    .select("id, status, status_detail, replied_at, follow_up_step")
     .eq("campaign_id", params.id)
     .eq("workspace_id", workspace.workspace_id);
 
   const recipientList = recipients || [];
   const recipientIds = recipientList.map((r) => r.id);
 
-  let jobs: { status: string }[] = [];
+  let jobs: { status: string; job_type: string }[] = [];
   if (recipientIds.length > 0) {
     const { data: jobData } = await supabase
       .from("email_jobs")
-      .select("status")
+      .select("status, job_type")
       .in("campaign_recipient_id", recipientIds);
     jobs = jobData || [];
   }
 
-  // Compute the 7 exact UI metric states
   const total = recipientList.length;
-  const pending = jobs.filter((j) => j.status === "queued").length + recipientList.filter((r) => r.status === "pending" || r.status === "ready").length;
+  
+  // A job is pending if it's queued
+  const pendingJobs = jobs.filter((j) => j.status === "queued");
+  
+  const pending = pendingJobs.filter(j => j.job_type === "initial").length + recipientList.filter((r) => r.status === "pending" || r.status === "ready").length;
   const processing = jobs.filter((j) => j.status === "processing").length;
-  const sent = recipientList.filter((r) => r.status === "sent" || r.status === "delivered").length;
+  const sent = recipientList.filter((r) => r.status === "sent" && r.follow_up_step === 0).length;
+  const followUpSent = recipientList.filter((r) => r.follow_up_step > 0).length;
+  const followUpDue = pendingJobs.filter(j => j.job_type === "follow_up_1" || j.job_type === "follow_up_2").length;
+  
   const failed = recipientList.filter((r) => r.status === "failed" || r.status === "bounced").length;
-  const cancelled = recipientList.filter((r) => r.status === "stopped" || r.status === "unsubscribed").length + jobs.filter((j) => j.status === "cancelled").length;
+  const cancelled = recipientList.filter((r) => r.status === "stopped").length + jobs.filter((j) => j.status === "cancelled").length;
   const replied = recipientList.filter((r) => r.status === "replied" || r.replied_at !== null).length;
+  const unsubscribed = recipientList.filter((r) => r.status === "unsubscribed").length;
+  const noReply = sent + followUpSent; // Effectively those who have been contacted but haven't replied
 
   const stats = {
     total,
@@ -67,6 +75,10 @@ export default async function CampaignDashboardPage(props: {
     failed,
     cancelled,
     replied,
+    followUpDue,
+    followUpSent,
+    unsubscribed,
+    noReply
   };
 
   return (

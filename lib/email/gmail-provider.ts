@@ -135,9 +135,18 @@ export class GmailProvider implements EmailSendingProvider {
         `Subject: ${utf8Subject}`,
         "Content-Type: text/html; charset=utf-8",
         "MIME-Version: 1.0",
-        "",
-        options.body,
       ];
+
+      if (options.inReplyToMessageId) {
+        messageParts.push(`In-Reply-To: ${options.inReplyToMessageId}`);
+      }
+      if (options.references) {
+        messageParts.push(`References: ${options.references}`);
+      }
+
+      messageParts.push("");
+      messageParts.push(options.body);
+
       const message = messageParts.join("\n");
       const encodedMessage = Buffer.from(message)
         .toString("base64")
@@ -145,14 +154,21 @@ export class GmailProvider implements EmailSendingProvider {
         .replace(/\//g, "_")
         .replace(/=+$/, "");
 
+      const requestBody: Record<string, string> = { raw: encodedMessage };
+      if (options.threadId) {
+        requestBody.threadId = options.threadId;
+      }
+
       const res = await gmail.users.messages.send({
         userId: "me",
-        requestBody: {
-          raw: encodedMessage,
-        },
+        requestBody,
       });
 
-      return { success: true, messageId: res.data.id || undefined };
+      return { 
+        success: true, 
+        messageId: res.data.id || undefined,
+        threadId: res.data.threadId || undefined,
+      };
     } catch (error: unknown) {
       console.error("[GmailProvider] Send error:", error);
       const errMsg = error instanceof Error ? error.message : "Unknown error";
