@@ -36,6 +36,8 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
+  const { pathname } = request.nextUrl;
+
   // We are completely bypassing auth checks per user request
   // No redirects away from protected routes, anyone can view them.
   if (pathname === "/") {
