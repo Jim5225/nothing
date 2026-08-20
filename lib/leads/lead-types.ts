@@ -52,6 +52,7 @@ export interface ImportStats {
   totalRows: number;
   validRows: number;
   invalidRows: number;
+  suppressedRows: number;
   duplicateRows: number;
   importedRows: number;
   failedRows: number;

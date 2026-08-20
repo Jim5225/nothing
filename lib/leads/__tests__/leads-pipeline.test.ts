@@ -71,8 +71,8 @@ const textLines = Array.from({ length: 50 }, (_, i) => `Contact ${i}: user${i}@d
 const textChunks = chunkText(textLines, 500);
 assert(textChunks.length >= 2, "Chunks large text at line boundaries safely");
 
-// ── Scenario 6: In-Batch Duplicate Emails (Additive Merge) ───────────────────
-console.log("\nScenario 6: In-Batch Duplicate Emails Merged Additively");
+// ── Scenario 6: In-Batch Duplicate Emails Merged, but Different Emails with Same Phone are Not ──
+console.log("\nScenario 6: In-Batch Duplicate Emails Merged, but Different Emails with Same Phone are Not");
 const baseLead: NormalizedLead = {
   workspace_id: "ws-1",
   email: "sarah@cyberdyne.com",
@@ -92,30 +92,40 @@ const baseLead: NormalizedLead = {
   source_record_id: null,
   custom_fields: {},
 };
-const dupeLead: NormalizedLead = {
+const dupeEmailLead: NormalizedLead = {
   ...baseLead,
   last_name: "Connor",
   full_name: "Sarah Connor",
   company_name: "Cyberdyne Systems, LLC",
   phone: "+15551234567",
 };
-const { uniqueLeads: inBatchResult, inBatchDuplicates: inBatchCount } = deduplicateInBatch([baseLead, dupeLead]);
-assertEquals(inBatchResult.length, 1, "Deduplicates 2 matching emails into 1 unique lead");
-assertEquals(inBatchCount, 1, "Counts 1 duplicate in batch");
-assertEquals(inBatchResult[0].last_name, "Connor", "Additive merge preserves non-empty last_name");
-assertEquals(inBatchResult[0].phone, "+15551234567", "Additive merge preserves non-empty phone");
-assertEquals(inBatchResult[0].company_name, "Cyberdyne Systems, LLC", "Preserves company legal suffix");
+const diffEmailSamePhoneLead: NormalizedLead = {
+  ...baseLead,
+  email: "john@cyberdyne.com",
+  normalized_email: "john@cyberdyne.com",
+  first_name: "John",
+  full_name: "John Connor",
+  phone: "+15551234567",
+};
+
+const { uniqueLeads: inBatchResult, inBatchDuplicates: inBatchCount } = deduplicateInBatch([baseLead, dupeEmailLead, diffEmailSamePhoneLead]);
+assertEquals(inBatchResult.length, 2, "Deduplicates matching emails, but keeps different emails with same phone");
+assertEquals(inBatchCount, 1, "Counts 1 duplicate in batch (the email duplicate)");
+const mergedSarah = inBatchResult.find(l => l.normalized_email === "sarah@cyberdyne.com")!;
+assertEquals(mergedSarah.last_name, "Connor", "Additive merge preserves non-empty last_name");
+assertEquals(mergedSarah.phone, "+15551234567", "Additive merge preserves non-empty phone");
+assertEquals(mergedSarah.company_name, "Cyberdyne Systems, LLC", "Preserves company legal suffix");
 
 // ── Scenario 7: Existing Lead + Imported Lead Partitioning ───────────────────
 console.log("\nScenario 7: Database Duplicate Partitioning");
 const existingEmails = new Set(["sarah@cyberdyne.com"]);
 const { newLeads, existingLeads } = partitionExistingLeads(inBatchResult, existingEmails);
-assertEquals(newLeads.length, 0, "Identifies existing lead as duplicate against DB");
+assertEquals(newLeads.length, 1, "Identifies existing lead as duplicate against DB"); // John is new
 assertEquals(existingLeads.length, 1, "Correct existing leads count");
 
 // ── Scenario 8: Conflicting Lead Info Merge ──────────────────────────────────
 console.log("\nScenario 8: Non-Destructive Field Merging");
-const mergedRecord = mergeLeadRecords(baseLead, dupeLead);
+const mergedRecord = mergeLeadRecords(baseLead, dupeEmailLead);
 assertEquals(mergedRecord.first_name, "Sarah", "Keeps primary first_name");
 assertEquals(mergedRecord.last_name, "Connor", "Populates missing last_name from incoming record");
 

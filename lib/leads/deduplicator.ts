@@ -47,29 +47,9 @@ export function deduplicateInBatch(leads: NormalizedLead[]): {
   }
 
   // Secondary pass: Deduplicate by phone if phone is non-null
-  const phoneMap = new Map<string, NormalizedLead>();
-  const finalLeads: NormalizedLead[] = [];
-
-  for (const lead of emailMap.values()) {
-    if (lead.phone && lead.phone.length >= 7) {
-      if (phoneMap.has(lead.phone)) {
-        const existing = phoneMap.get(lead.phone)!;
-        // Merge records
-        const merged = mergeLeadRecords(existing, lead);
-        phoneMap.set(lead.phone, merged);
-        // Replace in final leads
-        const index = finalLeads.indexOf(existing);
-        if (index !== -1) {
-          finalLeads[index] = merged;
-        }
-        inBatchDuplicates++;
-        continue;
-      } else {
-        phoneMap.set(lead.phone, lead);
-      }
-    }
-    finalLeads.push(lead);
-  }
+  // REMOVED: Phone numbers must not be treated as a definitive duplicate.
+  // Primary hard duplicate identity is workspace_id + normalized_email.
+  const finalLeads: NormalizedLead[] = Array.from(emailMap.values());
 
   return {
     uniqueLeads: finalLeads,

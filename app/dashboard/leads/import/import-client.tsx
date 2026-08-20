@@ -239,7 +239,7 @@ export function ImportClient() {
       </CardHeader>
       <CardContent className="pt-6 space-y-6">
         {/* Metric Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
           <div className="p-4 border rounded-xl bg-gray-50/80">
             <div className="text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Total Processed</div>
             <div className="text-2xl font-bold text-gray-800">{stats?.totalRows || 0}</div>
@@ -251,18 +251,33 @@ export function ImportClient() {
             </div>
           </div>
           <div className="p-4 border border-orange-200 rounded-xl bg-orange-50/70">
-            <div className="text-xs font-medium text-orange-600 mb-1 uppercase tracking-wide">Duplicates Skipped</div>
+            <div className="text-xs font-medium text-orange-600 mb-1 uppercase tracking-wide">Duplicates</div>
             <div className="text-2xl font-bold text-orange-700">
               {stats?.duplicateRows || 0}
             </div>
           </div>
           <div className="p-4 border border-red-200 rounded-xl bg-red-50/70">
-            <div className="text-xs font-medium text-red-600 mb-1 uppercase tracking-wide">Invalid / Rejected</div>
+            <div className="text-xs font-medium text-red-600 mb-1 uppercase tracking-wide">Invalid</div>
             <div className="text-2xl font-bold text-red-700">
               {stats?.invalidRows || 0}
             </div>
           </div>
+          <div className="p-4 border border-slate-200 rounded-xl bg-slate-100/70">
+            <div className="text-xs font-medium text-slate-600 mb-1 uppercase tracking-wide">Suppressed</div>
+            <div className="text-2xl font-bold text-slate-700">
+              {stats?.suppressedRows || 0}
+            </div>
+          </div>
         </div>
+
+        {stats?.failedRows ? (
+          <div className="rounded-xl border border-red-300 bg-red-50/60 p-4 mt-4">
+             <div className="flex items-center gap-2 font-medium text-red-900">
+               <AlertCircle className="w-5 h-5 text-red-600" />
+               Warning: {stats.failedRows} rows failed to save to the database.
+             </div>
+          </div>
+        ) : null}
 
         {/* Validation Errors Drawer (if any) */}
         {validationErrors.length > 0 && (

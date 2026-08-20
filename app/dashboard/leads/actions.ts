@@ -6,7 +6,7 @@ import { revalidatePath } from "next/cache";
 import { RawLeadInput, LeadImportResult, NormalizedLead, LeadValidationError } from "@/lib/leads/lead-types";
 import { normalizeLeadRecord } from "@/lib/leads/normalizer";
 import { validateLead } from "@/lib/leads/validator";
-import { deduplicateInBatch } from "@/lib/leads/deduplicator";
+import { deduplicateInBatch, mergeLeadRecords } from "@/lib/leads/deduplicator";
 import { detectInputFormat } from "@/lib/leads/parser";
 import { refineLeadInputWithAI } from "@/lib/leads/ai-refiner";
 
@@ -69,6 +69,7 @@ export async function processLeadImport(
   const validationErrors: LeadValidationError[] = [];
   const validNormalizedLeads: NormalizedLead[] = [];
   let invalidRows = 0;
+  let suppressedRows = 0;
 
   // 2. Fetch workspace suppression list to exclude unsubscribed/bounced contacts
   const { data: suppressionData } = await supabase
@@ -116,7 +117,7 @@ export async function processLeadImport(
       }
 
       if (suppressedSet.has(normalized.normalized_email)) {
-        invalidRows++;
+        suppressedRows++;
         validationErrors.push({
           row: index + 1,
           email: normalized.email,
@@ -142,34 +143,81 @@ export async function processLeadImport(
   let duplicateRows = inBatchDuplicates;
   let failedRows = 0;
 
-  // 5. Database Chunked Batch Insert with On-Conflict Deduplication
+  // 5. Database Chunked Batch Insert with Safe Enrichment
   if (uniqueLeads.length > 0) {
     const CHUNK_SIZE = 500;
     for (let i = 0; i < uniqueLeads.length; i += CHUNK_SIZE) {
       const chunk = uniqueLeads.slice(i, i + CHUNK_SIZE);
 
       try {
+        // Fetch existing leads for the chunk to perform safe in-memory enrichment
+        const emailsInChunk = chunk.map(l => l.normalized_email);
+        const { data: existingData, error: fetchError } = await supabase
+          .from("leads")
+          .select("*")
+          .eq("workspace_id", workspaceId)
+          .in("normalized_email", emailsInChunk);
+
+        if (fetchError) {
+          console.error("[Database Batch Fetch Error]", fetchError);
+          failedRows += chunk.length;
+          continue;
+        }
+
+        const existingLeadsMap = new Map((existingData || []).map((l: any) => [l.normalized_email, l]));
+        
+        // Merge incoming records with existing records (non-destructive enrichment)
+        const enrichedChunk = chunk.map(incomingLead => {
+          const existing = existingLeadsMap.get(incomingLead.normalized_email);
+          if (existing) {
+            // mergeLeadRecords prioritizes existing non-null fields over incoming
+            return mergeLeadRecords(existing as unknown as NormalizedLead, incomingLead);
+          }
+          return incomingLead;
+        });
+
         const { data: inserted, error: insertError } = await supabase
           .from("leads")
-          .upsert(chunk, {
+          .upsert(enrichedChunk, {
             onConflict: "workspace_id,normalized_email",
-            ignoreDuplicates: true,
+            ignoreDuplicates: false, // Update instead of ignore
           })
-          .select("id");
+          .select("id, normalized_email");
 
         if (insertError) {
           console.error("[Database Batch Insert Error]", insertError);
           failedRows += chunk.length;
         } else {
+          // Count newly imported vs updated duplicates
           const insertedCount = inserted?.length || 0;
-          importedRows += insertedCount;
-          duplicateRows += chunk.length - insertedCount;
+          let newInserts = 0;
+          let updatedDupes = 0;
+          
+          if (inserted) {
+            for (const row of inserted) {
+               if (existingLeadsMap.has(row.normalized_email)) {
+                 updatedDupes++;
+               } else {
+                 newInserts++;
+               }
+            }
+          }
+          
+          importedRows += newInserts;
+          duplicateRows += updatedDupes;
         }
       } catch (chunkErr) {
         console.error("[Chunk Exception]", chunkErr);
         failedRows += chunk.length;
       }
     }
+  }
+
+  let finalStatus = "completed";
+  if (failedRows > 0 && importedRows === 0 && duplicateRows === 0) {
+    finalStatus = "failed";
+  } else if (failedRows > 0) {
+    finalStatus = "completed_with_errors";
   }
 
   // 6. Finalize lead_imports record
@@ -179,10 +227,11 @@ export async function processLeadImport(
       total_rows: totalRows || rawData.length,
       valid_rows: validNormalizedLeads.length,
       invalid_rows: invalidRows,
+      suppressed_rows: suppressedRows,
       duplicate_rows: duplicateRows,
       imported_rows: importedRows,
       failed_rows: failedRows,
-      status: "completed",
+      status: finalStatus,
       completed_at: new Date().toISOString(),
     })
     .eq("id", importRecord.id);
@@ -236,6 +285,7 @@ export async function processRawInputImport(
         totalRows: 0,
         validRows: 0,
         invalidRows: 0,
+        suppressedRows: 0,
         duplicateRows: 0,
         importedRows: 0,
         failedRows: 0,
@@ -254,6 +304,7 @@ export async function processRawInputImport(
         totalRows: 0,
         validRows: 0,
         invalidRows: 1,
+        suppressedRows: 0,
         duplicateRows: 0,
         importedRows: 0,
         failedRows: 0,

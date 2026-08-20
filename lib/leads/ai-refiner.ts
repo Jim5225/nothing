@@ -132,10 +132,11 @@ TASK: Extract all real contact/lead information found in the text below.
 
 STRICT ANTI-HALLUCINATION RULES:
 1. NEVER invent, guess, hallucinate, or extrapolate any information not explicitly present in the input text.
-2. If a contact does not have a phone number, company, job title, or location in the text, set that field to null.
-3. NEVER generate placeholder or fake emails (e.g. test@example.com, user@domain.com).
-4. Only extract contacts that have an actual email address present in the text.
-5. If the same person has multiple attributes, group them into a single object.
+2. NEVER infer or guess a person's name (first_name, last_name) or company_name from their email address or domain. If the name or company is not written explicitly in the text alongside the email, leave it null.
+3. If a contact does not have a phone number, company, job title, or location explicitly stated in the text, set that field to null.
+4. NEVER generate placeholder or fake emails (e.g. test@example.com, user@domain.com).
+5. Only extract contacts that have an actual email address present in the text.
+6. If the same person has multiple attributes, group them into a single object.
 
 Output format:
 Return ONLY a valid JSON array of objects with the following keys:
