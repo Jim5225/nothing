@@ -1,16 +1,15 @@
 import { NormalizedLead, LeadValidationResult } from "./lead-types";
 
-// Standard RFC 5322 compliant regex for practical email validation
-const EMAIL_REGEX =
+// Standard practical email regex: checks user part, @, domain part with dot and valid TLD
+const PRACTICAL_EMAIL_REGEX =
   /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
 
-// Common dummy/placeholder email patterns to reject
+// Obvious placeholder / dummy email patterns
 const PLACEHOLDER_EMAILS = new Set([
   "test@test.com",
   "example@example.com",
   "admin@example.com",
   "user@example.com",
-  "info@example.com",
   "placeholder@email.com",
   "sample@sample.com",
   "na@na.com",
@@ -18,7 +17,9 @@ const PLACEHOLDER_EMAILS = new Set([
 ]);
 
 /**
- * Validates email address format and checks for invalid/placeholder emails.
+ * Practical email syntax validation:
+ * Distinguishes missing email vs syntactically invalid email vs valid email format.
+ * (Note: Syntax validation does not guarantee mailbox deliverability).
  */
 export function validateEmail(email: string | null | undefined): {
   valid: boolean;
@@ -31,14 +32,14 @@ export function validateEmail(email: string | null | undefined): {
   const trimmed = email.trim().toLowerCase();
 
   if (trimmed.length > 254) {
-    return { valid: false, reason: "Email exceeds maximum length of 254 characters" };
+    return { valid: false, reason: "Email exceeds 254 characters" };
   }
 
   if (PLACEHOLDER_EMAILS.has(trimmed)) {
     return { valid: false, reason: "Placeholder or test email address rejected" };
   }
 
-  if (!EMAIL_REGEX.test(trimmed)) {
+  if (!PRACTICAL_EMAIL_REGEX.test(trimmed)) {
     return { valid: false, reason: "Invalid email syntax format" };
   }
 
@@ -50,7 +51,7 @@ export function validateEmail(email: string | null | undefined): {
   const [localPart, domainPart] = parts;
 
   if (localPart.length === 0 || localPart.length > 64) {
-    return { valid: false, reason: "Email username part length is invalid" };
+    return { valid: false, reason: "Email username length is invalid" };
   }
 
   if (!domainPart.includes(".")) {
@@ -94,7 +95,7 @@ export function validateLead(lead: NormalizedLead | null | undefined): LeadValid
 }
 
 /**
- * Checks a list of leads against a set of suppressed emails.
+ * Checks a list of leads against workspace suppression list.
  */
 export function partitionSuppressedLeads(
   leads: NormalizedLead[],

@@ -1,22 +1,23 @@
 import { NormalizedLead, RawLeadInput } from "./lead-types";
 
 /**
- * Normalizes email address by trimming, lowercasing, and removing artifacts.
+ * Normalizes email address deterministically:
+ * - Trims whitespace
+ * - Lowercases
+ * - Strips mailto:
+ * - Strips wrapping angle brackets or quotes (<user@domain.com> -> user@domain.com)
+ * - Strips trailing punctuation
  */
 export function normalizeEmail(email: string | null | undefined): string | null {
   if (!email || typeof email !== "string") return null;
 
   let cleaned = email.trim().toLowerCase();
 
-  // Strip mailto: prefix
   if (cleaned.startsWith("mailto:")) {
     cleaned = cleaned.substring(7).trim();
   }
 
-  // Strip wrapping angle brackets or quotes: <user@example.com> or "user@example.com"
   cleaned = cleaned.replace(/^[<"']+|[>"']+$/g, "").trim();
-
-  // Remove any trailing periods, commas, or semicolons
   cleaned = cleaned.replace(/[.,;:)]+$/, "");
 
   if (!cleaned || !cleaned.includes("@")) {
@@ -27,57 +28,34 @@ export function normalizeEmail(email: string | null | undefined): string | null 
 }
 
 /**
- * Capitalizes names with support for hyphenated and apostrophe-containing names (e.g. O'Connor, Jean-Luc).
- */
-export function titleCaseName(str: string | null | undefined): string | null {
-  if (!str || typeof str !== "string") return null;
-
-  const trimmed = str.trim().replace(/^["']+|["']+$/g, "");
-  if (!trimmed) return null;
-
-  // Split by whitespace and capitalize each word
-  return trimmed
-    .split(/\s+/)
-    .map((word) => {
-      // Handle hyphenated names like Jean-Luc
-      return word
-        .split("-")
-        .map((part) => {
-          // Handle apostrophes like O'Connor
-          return part
-            .split("'")
-            .map((sub) => {
-              if (!sub) return "";
-              return sub.charAt(0).toUpperCase() + sub.slice(1).toLowerCase();
-            })
-            .join("'");
-        })
-        .join("-");
-    })
-    .join(" ");
-}
-
-/**
- * Intelligently splits a full name into first and last names.
+ * Conservative Name Parsing:
+ * - Cleans whitespace and quotation marks
+ * - Splits full_name into first_name and last_name if individual fields are missing
+ * - Preserves original casing unless all-caps
  */
 export function parseAndNormalizeNames(
   firstName?: string | null,
   lastName?: string | null,
   fullName?: string | null
 ): { first_name: string | null; last_name: string | null; full_name: string | null } {
-  let first = firstName ? titleCaseName(firstName) : null;
-  let last = lastName ? titleCaseName(lastName) : null;
-  let full = fullName ? titleCaseName(fullName) : null;
+  let first = firstName ? String(firstName).trim() : null;
+  let last = lastName ? String(lastName).trim() : null;
+  let full = fullName ? String(fullName).trim() : null;
 
-  // If full_name is present but first/last are missing
+  // Clean empty strings
+  if (first === "") first = null;
+  if (last === "") last = null;
+  if (full === "") full = null;
+
+  // If full_name is present but first or last is missing, split conservatively
   if (full && (!first || !last)) {
-    // Remove common prefixes and suffixes (including leading comma)
-    const cleanedFull = full
+    // Strip common honorifics/suffixes
+    const cleaned = full
       .replace(/^(mr\.|mrs\.|ms\.|dr\.|prof\.)\s+/i, "")
       .replace(/,?\s+(jr\.|sr\.|ii|iii|iv|phd|md)$/i, "")
       .trim();
 
-    const parts = cleanedFull.split(/\s+/).map((p) => p.replace(/,$/, "").trim()).filter(Boolean);
+    const parts = cleaned.split(/\s+/).map((p) => p.replace(/,$/, "").trim()).filter(Boolean);
     if (parts.length === 1) {
       if (!first) first = parts[0];
     } else if (parts.length >= 2) {
@@ -95,7 +73,11 @@ export function parseAndNormalizeNames(
 }
 
 /**
- * Normalizes company name: trims, cleans quotes, standardizes corporate suffixes.
+ * Non-Destructive Company Normalization:
+ * - Trims extraneous whitespace and surrounding quotes
+ * - Cleans trailing punctuation
+ * - PRESERVES legal suffixes (LLC, Inc, Ltd, etc.) to prevent information destruction
+ * - Preserves original casing to protect brand names (e.g. eBay, OpenAI)
  */
 export function normalizeCompany(company: string | null | undefined): string | null {
   if (!company || typeof company !== "string") return null;
@@ -103,32 +85,14 @@ export function normalizeCompany(company: string | null | undefined): string | n
   let cleaned = company.trim().replace(/^["']+|["']+$/g, "").trim();
   if (!cleaned) return null;
 
-  // Clean trailing commas/dots first
-  cleaned = cleaned.replace(/[.,;:]\s*$/, "").trim();
-
-  // Strip trailing legal suffixes: LLC, Inc, Ltd, Corp, GmbH, Co
-  cleaned = cleaned.replace(/,?\s+(llc\.?|inc\.?|ltd\.?|corp\.?|gmbh|co\.?)$/i, "").trim();
-
-  // Clean trailing commas/dots again
-  cleaned = cleaned.replace(/[.,;:]\s*$/, "").trim();
-
-  // If company is in all-caps or all-lower, title-case it
-  if (cleaned === cleaned.toUpperCase() || cleaned === cleaned.toLowerCase()) {
-    cleaned = cleaned
-      .split(/\s+/)
-      .map((w) => {
-        // Keep acronyms like IBM, AI, USA in uppercase if length <= 3
-        if (w.length <= 3 && /^[A-Z0-9]+$/i.test(w)) return w.toUpperCase();
-        return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-      })
-      .join(" ");
-  }
+  // Clean trailing commas/dots
+  cleaned = cleaned.replace(/[,;:]\s*$/, "").trim();
 
   return cleaned || null;
 }
 
 /**
- * Normalizes website URL and extracts company domain.
+ * Normalizes website URL and extracts root company domain.
  */
 export function normalizeWebsite(url: string | null | undefined): {
   website_url: string | null;
@@ -144,7 +108,6 @@ export function normalizeWebsite(url: string | null | undefined): {
   // Remove trailing slashes
   cleaned = cleaned.replace(/\/+$/, "");
 
-  // Prepend https:// if no protocol
   let normalizedUrl = cleaned;
   if (!/^https?:\/\//i.test(normalizedUrl)) {
     normalizedUrl = `https://${normalizedUrl}`;
@@ -155,7 +118,6 @@ export function normalizeWebsite(url: string | null | undefined): {
     const parsed = new URL(normalizedUrl);
     domain = parsed.hostname.replace(/^www\./i, "").toLowerCase();
   } catch {
-    // If URL parsing fails, extract simple domain pattern
     const match = cleaned.match(/(?:https?:\/\/)?(?:www\.)?([a-z0-9.-]+\.[a-z]{2,})/i);
     if (match) {
       domain = match[1].toLowerCase();
@@ -169,7 +131,7 @@ export function normalizeWebsite(url: string | null | undefined): {
 }
 
 /**
- * Normalizes phone numbers, stripping unwanted noise while preserving international country codes.
+ * Normalizes phone numbers conservatively, preserving leading + for international format.
  */
 export function normalizePhone(phone: string | null | undefined): string | null {
   if (!phone || typeof phone !== "string") return null;
@@ -177,18 +139,15 @@ export function normalizePhone(phone: string | null | undefined): string | null 
   const trimmed = phone.trim();
   if (!trimmed) return null;
 
-  // Remove unwanted words like 'ext.', 'phone:', 'tel:'
   const cleaned = trimmed
     .replace(/^(tel|phone|mobile|cell|contact):\s*/i, "")
     .replace(/ext\.?\s*\d+/i, "")
     .trim();
 
-  // If starts with +, preserve it, remove other non-digit characters except dashes/spaces
   const hasPlus = cleaned.startsWith("+");
   const digitsOnly = cleaned.replace(/\D/g, "");
 
   if (digitsOnly.length < 7) {
-    // Invalid phone length
     return null;
   }
 
@@ -196,7 +155,7 @@ export function normalizePhone(phone: string | null | undefined): string | null 
 }
 
 /**
- * Normalizes location string (City, State, Country).
+ * Normalizes location string conservatively.
  */
 export function normalizeLocation(loc: string | null | undefined): string | null {
   if (!loc || typeof loc !== "string") return null;
@@ -208,11 +167,10 @@ export function normalizeLocation(loc: string | null | undefined): string | null
     .split(",")
     .map((part) => {
       const p = part.trim();
-      // Handle state abbreviations like "CA", "NY" (2 letters)
       if (p.length === 2 && /^[a-z]{2}$/i.test(p)) {
         return p.toUpperCase();
       }
-      return titleCaseName(p) || p;
+      return p;
     })
     .join(", ");
 }
@@ -230,7 +188,6 @@ export function normalizeLinkedInUrl(url: string | null | undefined): string | n
     cleaned = `https://${cleaned}`;
   }
 
-  // Ensure linkedin.com domain
   if (!cleaned.toLowerCase().includes("linkedin.com")) {
     return null;
   }
@@ -240,6 +197,7 @@ export function normalizeLinkedInUrl(url: string | null | undefined): string | n
 
 /**
  * Master Normalizer for a single lead record.
+ * Preserves unmapped input data in custom_fields for complete auditability.
  */
 export function normalizeLeadRecord(
   raw: RawLeadInput,
@@ -273,10 +231,10 @@ export function normalizeLeadRecord(
   const linkedin_url = normalizeLinkedInUrl(
     raw.linkedin_url ? String(raw.linkedin_url) : null
   );
-  const job_title = raw.job_title ? titleCaseName(String(raw.job_title)) : null;
-  const industry = raw.industry ? titleCaseName(String(raw.industry)) : null;
+  const job_title = raw.job_title ? String(raw.job_title).trim() : null;
+  const industry = raw.industry ? String(raw.industry).trim() : null;
 
-  // Preserve any unmapped / raw attributes in custom_fields
+  // Preserve all unmapped raw attributes in custom_fields
   const knownKeys = new Set([
     "email",
     "first_name",

@@ -2,12 +2,64 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { RawLeadInput } from "./lead-types";
 import { chunkText, parseCSVText, parseMarkdownTable } from "./parser";
 
-const CANDIDATE_MODELS = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
+const CANDIDATE_MODELS = ["gemini-2.5-flash", "gemini-1.5-flash"];
+
+// Standard recognized header aliases for 100% deterministic mapping
+const HEADER_ALIASES: Record<string, string[]> = {
+  email: ["email", "email_address", "email address", "e-mail", "work email", "contact email", "primary email"],
+  first_name: ["first_name", "firstname", "first name", "given name"],
+  last_name: ["last_name", "lastname", "last name", "surname", "family name"],
+  full_name: ["name", "full_name", "full name", "contact name", "lead name"],
+  company_name: ["company", "company_name", "company name", "organization", "org", "business", "company_title"],
+  job_title: ["title", "job_title", "job title", "position", "role", "designation"],
+  website_url: ["website", "website_url", "url", "domain", "web", "site"],
+  linkedin_url: ["linkedin", "linkedin_url", "linkedin profile", "linkedin url"],
+  phone: ["phone", "phone number", "mobile", "cell", "telephone", "tel"],
+  location: ["location", "city", "country", "address", "state"],
+  industry: ["industry", "sector", "vertical"],
+};
 
 /**
- * Invokes Gemini with candidate fallback models.
+ * Attempts 100% deterministic column header mapping without AI.
  */
-async function callGeminiWithFallback(prompt: string): Promise<string> {
+export function tryDeterministicHeaderMapping(headers: string[]): Record<string, string> | null {
+  const mapping: Record<string, string> = {};
+  const lowerHeaderMap = new Map<string, string>();
+
+  headers.forEach((h) => {
+    if (h && h.trim()) {
+      lowerHeaderMap.set(h.trim().toLowerCase(), h);
+    }
+  });
+
+  for (const [targetKey, aliases] of Object.entries(HEADER_ALIASES)) {
+    // 1. Check exact aliases
+    for (const alias of aliases) {
+      if (lowerHeaderMap.has(alias) && !mapping[targetKey]) {
+        mapping[targetKey] = lowerHeaderMap.get(alias)!;
+        break;
+      }
+    }
+  }
+
+  // 2. Fallback for compound email header if not found (e.g. "Client Email", "Subscriber Email")
+  if (!mapping.email) {
+    for (const [rawLower, original] of lowerHeaderMap.entries()) {
+      if (rawLower.includes("email") || rawLower.includes("e-mail")) {
+        mapping.email = original;
+        break;
+      }
+    }
+  }
+
+  // If email was matched, we have a valid deterministic mapping!
+  return mapping.email ? mapping : null;
+}
+
+/**
+ * Invokes Gemini with retry and candidate fallback models.
+ */
+async function callGeminiWithRetry(prompt: string, maxRetries = 2): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is not configured on the server.");
@@ -17,32 +69,37 @@ async function callGeminiWithFallback(prompt: string): Promise<string> {
   const genAI = new GoogleGenerativeAI(apiKey);
 
   for (const modelName of CANDIDATE_MODELS) {
-    try {
-      const model = genAI.getGenerativeModel({
-        model: modelName,
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0,
-        },
-      });
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const model = genAI.getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0,
+          },
+        });
 
-      const result = await model.generateContent(prompt);
-      const text = result.response.text();
-      if (text && text.trim()) {
-        return text;
+        const result = await model.generateContent(prompt);
+        const text = result.response.text();
+        if (text && text.trim()) {
+          return text;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        // Exponential backoff if not last attempt
+        if (attempt < maxRetries) {
+          const delayMs = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 200, 4000);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
       }
-    } catch (error) {
-      console.warn(`[AI Refiner] Model ${modelName} failed, attempting fallback:`, error);
-      lastError = error instanceof Error ? error : new Error(String(error));
     }
   }
 
-  throw lastError || new Error("All Gemini models failed to generate a response.");
+  throw lastError || new Error("Gemini AI extraction failed across all models.");
 }
 
 /**
- * Anti-hallucination validator: Checks that extracted emails and critical tokens
- * actually originated in the source text chunk.
+ * Strict Anti-Hallucination Filter: Discards any extracted email not rooted in the source text.
  */
 function verifyExtractedLeads(extracted: RawLeadInput[], sourceChunk: string): RawLeadInput[] {
   const lowerSource = sourceChunk.toLowerCase();
@@ -54,12 +111,11 @@ function verifyExtractedLeads(extracted: RawLeadInput[], sourceChunk: string): R
     const email = lead.email.trim().toLowerCase();
     if (!email.includes("@")) return false;
 
-    // Check if the domain or username exists in the source text to prevent AI hallucinations
     const [user, domain] = email.split("@");
     const emailPresent = lowerSource.includes(email) || (lowerSource.includes(user) && lowerSource.includes(domain));
 
     if (!emailPresent) {
-      console.warn(`[Anti-Hallucination] Discarding hallucinated email not found in input: ${email}`);
+      console.warn(`[Anti-Hallucination] Discarding invented email: ${email}`);
       return false;
     }
 
@@ -68,7 +124,7 @@ function verifyExtractedLeads(extracted: RawLeadInput[], sourceChunk: string): R
 }
 
 /**
- * Extracts leads from an unstructured or semi-structured text chunk using Gemini AI.
+ * Extracts leads from unstructured text using Gemini AI with strict anti-hallucination rules.
  */
 export async function extractLeadsFromChunk(chunk: string): Promise<RawLeadInput[]> {
   const prompt = `You are a strict data extraction engine.
@@ -99,7 +155,7 @@ Input Text:
 ${chunk}
 `;
 
-  const rawJson = await callGeminiWithFallback(prompt);
+  const rawJson = await callGeminiWithRetry(prompt);
   const cleaned = rawJson.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
   const parsed = JSON.parse(cleaned);
 
@@ -111,7 +167,7 @@ ${chunk}
 }
 
 /**
- * Discovers column mapping for structured CSV/Markdown tables using Gemini AI.
+ * AI Schema Discovery for ambiguous CSV / Markdown headers.
  */
 export async function discoverTableSchemaWithAI(sampleRows: Record<string, string>[]): Promise<Record<string, string>> {
   if (sampleRows.length === 0) return {};
@@ -119,7 +175,7 @@ export async function discoverTableSchemaWithAI(sampleRows: Record<string, strin
   const headers = Object.keys(sampleRows[0]);
   const sampleData = sampleRows.slice(0, 5);
 
-  const prompt = `You are a database schema matching assistant.
+  const prompt = `You are a schema matching assistant.
 Match the input column headers to our target lead fields.
 
 Target Fields:
@@ -146,20 +202,21 @@ Example: {"email": "Work Email", "full_name": "Contact Name", "company_name": "O
 Only include keys where a matching column exists in the headers. Do not invent column names.`;
 
   try {
-    const rawJson = await callGeminiWithFallback(prompt);
+    const rawJson = await callGeminiWithRetry(prompt, 1);
     const cleaned = rawJson.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
     const mapping = JSON.parse(cleaned);
     return typeof mapping === "object" && mapping !== null ? mapping : {};
   } catch (error) {
-    console.warn("[Schema Discovery] Fallback to heuristic mapping due to error:", error);
+    console.warn("[Schema Discovery] Error discovering schema:", error);
     return {};
   }
 }
 
 /**
- * High-performance AI Refinement Pipeline:
- * - Structured large files: Samples schema with AI -> fast streams all rows -> zero token waste!
- * - Unstructured text: Chunks & extracts concurrently with Gemini AI.
+ * Unified Refiner:
+ * 1. If structured table -> Try deterministic mapping (0 AI cost, 0 latency).
+ * 2. If ambiguous table -> AI schema discovery on 5 sample rows -> Fast deterministic stream.
+ * 3. If unstructured text -> Chunked Gemini AI extraction with anti-hallucination guard.
  */
 export async function refineLeadInputWithAI(
   rawText: string,
@@ -170,41 +227,43 @@ export async function refineLeadInputWithAI(
       return { success: false, error: "Input text is empty." };
     }
 
-    // Fast-path for large structured CSV or Markdown
+    // Step 1: Structured CSV / Markdown handling
     if (format === "csv" || format === "markdown") {
       const rows = format === "csv" ? parseCSVText(rawText) : parseMarkdownTable(rawText);
 
       if (rows.length > 0) {
-        // Sample schema with AI
-        const schemaMap = await discoverTableSchemaWithAI(rows);
+        const headers = Object.keys(rows[0]);
 
-        // If AI found an email mapping, map all rows directly
-        if (schemaMap.email && Object.keys(schemaMap).length > 0) {
-          const mappedLeads: RawLeadInput[] = rows.map((row) => {
-            const lead: RawLeadInput = {
-              email: row[schemaMap.email] || null,
-              first_name: schemaMap.first_name ? row[schemaMap.first_name] : null,
-              last_name: schemaMap.last_name ? row[schemaMap.last_name] : null,
-              full_name: schemaMap.full_name ? row[schemaMap.full_name] : null,
-              company_name: schemaMap.company_name ? row[schemaMap.company_name] : null,
-              job_title: schemaMap.job_title ? row[schemaMap.job_title] : null,
-              phone: schemaMap.phone ? row[schemaMap.phone] : null,
-              website_url: schemaMap.website_url ? row[schemaMap.website_url] : null,
-              linkedin_url: schemaMap.linkedin_url ? row[schemaMap.linkedin_url] : null,
-              location: schemaMap.location ? row[schemaMap.location] : null,
-              industry: schemaMap.industry ? row[schemaMap.industry] : null,
-              custom_fields: { ...row }, // Preserve all original unmapped fields
-            };
-            return lead;
-          });
+        // A. Try deterministic mapping first (NO AI needed!)
+        let schemaMap = tryDeterministicHeaderMapping(headers);
+
+        // B. If ambiguous, ask AI to map sample headers once
+        if (!schemaMap) {
+          schemaMap = await discoverTableSchemaWithAI(rows);
+        }
+
+        if (schemaMap && schemaMap.email) {
+          const mappedLeads: RawLeadInput[] = rows.map((row) => ({
+            email: row[schemaMap.email] || null,
+            first_name: schemaMap.first_name ? row[schemaMap.first_name] : null,
+            last_name: schemaMap.last_name ? row[schemaMap.last_name] : null,
+            full_name: schemaMap.full_name ? row[schemaMap.full_name] : null,
+            company_name: schemaMap.company_name ? row[schemaMap.company_name] : null,
+            job_title: schemaMap.job_title ? row[schemaMap.job_title] : null,
+            phone: schemaMap.phone ? row[schemaMap.phone] : null,
+            website_url: schemaMap.website_url ? row[schemaMap.website_url] : null,
+            linkedin_url: schemaMap.linkedin_url ? row[schemaMap.linkedin_url] : null,
+            location: schemaMap.location ? row[schemaMap.location] : null,
+            industry: schemaMap.industry ? row[schemaMap.industry] : null,
+            custom_fields: { ...row }, // Preserve all original unmapped fields
+          }));
 
           return { success: true, data: mappedLeads };
         }
       }
     }
 
-    // For unstructured text or if schema discovery found no email column:
-    // Chunk input and process through Gemini AI extraction
+    // Step 2: Unstructured Text handling via Chunked Gemini Extraction
     const chunks = chunkText(rawText, 25000);
     const allLeads: RawLeadInput[] = [];
 

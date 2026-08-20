@@ -64,14 +64,16 @@ export function parseMarkdownTable(text: string): Record<string, string>[] {
     header: true,
     delimiter: "|",
     skipEmptyLines: "greedy",
+    transformHeader: (h) => h.trim().replace(/^["']+|["']+$/g, "").trim(),
+    transform: (v) => (typeof v === "string" ? v.trim().replace(/^["']+|["']+$/g, "").trim() : v),
   });
 
   return (parsed.data || []).map((row) => {
     const cleanRow: Record<string, string> = {};
     for (const [k, v] of Object.entries(row)) {
-      const cleanKey = k ? k.trim() : "";
+      const cleanKey = k ? k.trim().replace(/^["']+|["']+$/g, "").trim() : "";
       if (cleanKey) {
-        cleanRow[cleanKey] = typeof v === "string" ? v.trim() : String(v || "");
+        cleanRow[cleanKey] = typeof v === "string" ? v.trim().replace(/^["']+|["']+$/g, "").trim() : String(v || "");
       }
     }
     return cleanRow;
@@ -85,14 +87,16 @@ export function parseCSVText(text: string): Record<string, string>[] {
   const parsed = Papa.parse<Record<string, string>>(text, {
     header: true,
     skipEmptyLines: "greedy",
+    transformHeader: (h) => h.trim().replace(/^["']+|["']+$/g, "").trim(),
+    transform: (v) => (typeof v === "string" ? v.trim().replace(/^["']+|["']+$/g, "").trim() : v),
   });
 
   return (parsed.data || []).map((row) => {
     const cleanRow: Record<string, string> = {};
     for (const [k, v] of Object.entries(row)) {
-      const cleanKey = k ? k.trim() : "";
+      const cleanKey = k ? k.trim().replace(/^["']+|["']+$/g, "").trim() : "";
       if (cleanKey) {
-        cleanRow[cleanKey] = typeof v === "string" ? v.trim() : String(v || "");
+        cleanRow[cleanKey] = typeof v === "string" ? v.trim().replace(/^["']+|["']+$/g, "").trim() : String(v || "");
       }
     }
     return cleanRow;

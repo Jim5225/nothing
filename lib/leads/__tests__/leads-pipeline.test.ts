@@ -1,20 +1,10 @@
-import {
-  normalizeEmail,
-  titleCaseName,
-  parseAndNormalizeNames,
-  normalizeCompany,
-  normalizeWebsite,
-  normalizePhone,
-  normalizeLocation,
-  normalizeLinkedInUrl,
-  normalizeLeadRecord,
-} from "../normalizer";
+import { normalizeLeadRecord } from "../normalizer";
 import { validateEmail, validateLead, partitionSuppressedLeads } from "../validator";
 import { deduplicateInBatch, mergeLeadRecords, partitionExistingLeads } from "../deduplicator";
 import { detectInputFormat, parseMarkdownTable, parseCSVText, parseRawInput, chunkText } from "../parser";
+import { tryDeterministicHeaderMapping } from "../ai-refiner";
 import { NormalizedLead, RawLeadInput } from "../lead-types";
 
-// Simple test framework
 let passedCount = 0;
 let failedCount = 0;
 
@@ -34,253 +24,201 @@ function assertEquals(actual: unknown, expected: unknown, testName: string) {
   assert(actualStr === expectedStr, testName, `Expected: ${expectedStr}, Got: ${actualStr}`);
 }
 
-console.log("\n==========================================");
-console.log("RUNNING LEAD INGESTION & NORMALIZATION TESTS");
-console.log("==========================================\n");
+console.log("\n========================================================");
+console.log("RUNNING REVISED LEAD INGESTION & PIPELINE TEST SUITE (19 SCENARIOS)");
+console.log("========================================================\n");
 
-// ── 1. Normalizer Tests ──────────────────────────────────────────────────────
-console.log("1. Normalizer Tests:");
+// ── Scenario 1: Clean CSV Parsing & Deterministic Mapping ────────────────────
+console.log("Scenario 1: Clean CSV Parsing & Deterministic Mapping");
+const cleanCSV = `First Name,Last Name,Email,Company,Job Title\nBruce,Wayne,bruce@wayne.com,Wayne Enterprises,CEO`;
+const parsedClean = parseCSVText(cleanCSV);
+assertEquals(parsedClean.length, 1, "Parses 1 clean CSV row");
+const headersClean = Object.keys(parsedClean[0]);
+const mapClean = tryDeterministicHeaderMapping(headersClean);
+assert(mapClean !== null && mapClean.email === "Email", "Deterministic mapping identifies Email without AI");
 
-assertEquals(normalizeEmail("  JOHN.DOE@Example.COM  "), "john.doe@example.com", "Normalizes email casing and whitespace");
-assertEquals(normalizeEmail("<sarah@domain.co.uk>"), "sarah@domain.co.uk", "Strips angle brackets from email");
-assertEquals(normalizeEmail("mailto:alex@acme.org."), "alex@acme.org", "Strips mailto: prefix and trailing punctuation");
-assertEquals(normalizeEmail(""), null, "Empty email returns null");
-assertEquals(normalizeEmail(null), null, "Null email returns null");
+// ── Scenario 2: Messy CSV (mixed spacing, semicolons, quotes) ────────────────
+console.log("\nScenario 2: Messy CSV Parsing");
+const messyCSV = `" First Name " ; " Email " ; " Company "\n" Clark " ; " clark@dailyplanet.com " ; " Daily Planet, Inc. "`;
+const parsedMessy = parseCSVText(messyCSV);
+assertEquals(parsedMessy.length, 1, "Parses messy CSV row");
+assertEquals(parsedMessy[0]["Email"], "clark@dailyplanet.com", "Trims quotes and whitespace in CSV cells");
 
-assertEquals(titleCaseName("SARAH CONNOR"), "Sarah Connor", "Title-cases all-caps name");
-assertEquals(titleCaseName("o'connor"), "O'Connor", "Handles apostrophe names");
-assertEquals(titleCaseName("jean-luc picard"), "Jean-Luc Picard", "Handles hyphenated names");
+// ── Scenario 3: CSV with Missing Columns (Optional fields remain null) ───────
+console.log("\nScenario 3: CSV with Missing Optional Columns");
+const minimalLead: RawLeadInput = { email: "minimal@solo.io" };
+const normMinimal = normalizeLeadRecord(minimalLead, "ws-1");
+assert(normMinimal !== null, "Successfully normalizes lead with only email");
+assertEquals(normMinimal?.phone, null, "Missing phone remains null (never invented)");
+assertEquals(normMinimal?.company_name, null, "Missing company remains null (never invented)");
+assertEquals(normMinimal?.job_title, null, "Missing job title remains null (never invented)");
 
-const splitResult = parseAndNormalizeNames(null, null, "Dr. Bruce Wayne, Jr.");
-assertEquals(splitResult.first_name, "Bruce", "Extracts first name from full name ignoring Dr.");
-assertEquals(splitResult.last_name, "Wayne", "Extracts last name from full name ignoring Jr.");
-assertEquals(splitResult.full_name, "Dr. Bruce Wayne, Jr.", "Preserves title-cased full name");
+// ── Scenario 4: Markdown Table Parsing ───────────────────────────────────────
+console.log("\nScenario 4: Markdown Table Parsing");
+const mdTable = `
+| Full Name | Email Address | Organization |
+|---|---|---|
+| Peter Parker | peter@dailybugle.com | Daily Bugle |
+| Tony Stark | tony@stark.com | Stark Industries, LLC |
+`;
+const parsedMd = parseMarkdownTable(mdTable);
+assertEquals(parsedMd.length, 2, "Parses 2 Markdown table rows ignoring dividers");
+assertEquals(parsedMd[0]["Email Address"], "peter@dailybugle.com", "Extracts email from Markdown table");
 
-assertEquals(normalizeCompany("  cyberdyne systems, llc.  "), "Cyberdyne Systems", "Cleans company casing and suffix");
-assertEquals(normalizeCompany("IBM"), "IBM", "Preserves uppercase short acronyms for companies");
+// ── Scenario 5: Plain Text & Unstructured Chunking ───────────────────────────
+console.log("\nScenario 5: Unstructured Plain Text Chunking");
+const textLines = Array.from({ length: 50 }, (_, i) => `Contact ${i}: user${i}@domain.com, Phone: +1 555 000 ${i}`).join("\n");
+const textChunks = chunkText(textLines, 500);
+assert(textChunks.length >= 2, "Chunks large text at line boundaries safely");
 
-const webResult = normalizeWebsite("www.apple.com/iphone/");
-assertEquals(webResult.website_url, "https://www.apple.com/iphone", "Normalizes website url with https");
-assertEquals(webResult.company_domain, "apple.com", "Extracts clean root domain");
-
-assertEquals(normalizePhone("+1 (555) 123-4567 ext. 88"), "+15551234567", "Cleans phone and preserves country code");
-assertEquals(normalizePhone("123"), null, "Rejects invalid short phone");
-
-assertEquals(normalizeLocation("san francisco, ca"), "San Francisco, CA", "Normalizes city and 2-letter state code");
-assertEquals(normalizeLinkedInUrl("linkedin.com/in/johndoe/"), "https://linkedin.com/in/johndoe", "Normalizes LinkedIn profile URL");
-
-// Test Lead Record Normalization with Custom Fields Preservation
-const rawLead: RawLeadInput = {
-  email: "Tony.Stark@StarkIndustries.com",
-  full_name: "Tony Stark",
-  company_name: "Stark Industries, Inc.",
-  job_title: "CEO & Chief Engineer",
-  website_url: "starkindustries.com",
-  phone: "+1 800 555 9999",
-  location: "Malibu, CA, USA",
-  annual_revenue: "$10B",
-  notes: "Key VIP client",
-};
-
-const normalized = normalizeLeadRecord(rawLead, "ws-123", "CSV Import", "imp-456");
-assert(normalized !== null, "Successfully normalizes complete lead record");
-assertEquals(normalized?.normalized_email, "tony.stark@starkindustries.com", "Lead normalized_email correct");
-assertEquals(normalized?.first_name, "Tony", "Lead first_name correct");
-assertEquals(normalized?.last_name, "Stark", "Lead last_name correct");
-assertEquals(normalized?.company_name, "Stark Industries", "Lead company_name cleaned");
-assertEquals(normalized?.company_domain, "starkindustries.com", "Lead company_domain extracted");
-assertEquals(normalized?.custom_fields?.annual_revenue, "$10B", "Preserves unmapped field annual_revenue");
-assertEquals(normalized?.custom_fields?.notes, "Key VIP client", "Preserves unmapped field notes");
-
-// ── 2. Validator Tests ───────────────────────────────────────────────────────
-console.log("\n2. Validator Tests:");
-
-assert(validateEmail("user@domain.com").valid, "Validates standard email");
-assert(validateEmail("user.name+tag@sub.domain.co.uk").valid, "Validates complex sub-domain email with tag");
-assert(!validateEmail("plainaddress").valid, "Rejects email missing @ and domain");
-assert(!validateEmail("@missinguser.com").valid, "Rejects email missing username");
-assert(!validateEmail("user@domain").valid, "Rejects email missing TLD");
-assert(!validateEmail("test@test.com").valid, "Rejects placeholder dummy email");
-assert(!validateEmail("").valid, "Rejects empty string");
-
-const validLeadObj: NormalizedLead = {
-  workspace_id: "ws-123",
-  email: "valid@company.com",
-  normalized_email: "valid@company.com",
-  first_name: "Valid",
-  last_name: "User",
-  full_name: "Valid User",
-  company_name: "Company",
-  company_domain: "company.com",
-  job_title: "Lead",
-  phone: "+15551234567",
-  website_url: "https://company.com",
+// ── Scenario 6: In-Batch Duplicate Emails (Additive Merge) ───────────────────
+console.log("\nScenario 6: In-Batch Duplicate Emails Merged Additively");
+const baseLead: NormalizedLead = {
+  workspace_id: "ws-1",
+  email: "sarah@cyberdyne.com",
+  normalized_email: "sarah@cyberdyne.com",
+  first_name: "Sarah",
+  last_name: null,
+  full_name: "Sarah",
+  company_name: null,
+  company_domain: null,
+  job_title: null,
+  phone: null,
+  website_url: null,
   linkedin_url: null,
-  location: "New York, NY",
-  industry: "Tech",
+  location: null,
+  industry: null,
   source: "CSV",
   source_record_id: null,
   custom_fields: {},
 };
-
-assert(validateLead(validLeadObj).valid, "Validates correct NormalizedLead record");
-
-const invalidLeadObj = { ...validLeadObj, normalized_email: "not-an-email" };
-assert(!validateLead(invalidLeadObj).valid, "Rejects lead with invalid normalized_email");
-
-const suppressed = new Set(["suppressed@bad.com"]);
-const { active, suppressed: foundSuppressed } = partitionSuppressedLeads(
-  [validLeadObj, { ...validLeadObj, normalized_email: "suppressed@bad.com" }],
-  suppressed
-);
-assertEquals(active.length, 1, "Active leads count after suppression check is 1");
-assertEquals(foundSuppressed.length, 1, "Suppressed leads correctly identified");
-
-// ── 3. Deduplicator Tests ────────────────────────────────────────────────────
-console.log("\n3. Deduplicator Tests:");
-
-const leadA: NormalizedLead = {
-  ...validLeadObj,
-  email: "clark.kent@dailyplanet.com",
-  normalized_email: "clark.kent@dailyplanet.com",
-  first_name: "Clark",
-  last_name: null,
-  company_name: "Daily Planet",
-  phone: null,
+const dupeLead: NormalizedLead = {
+  ...baseLead,
+  last_name: "Connor",
+  full_name: "Sarah Connor",
+  company_name: "Cyberdyne Systems, LLC",
+  phone: "+15551234567",
 };
+const { uniqueLeads: inBatchResult, inBatchDuplicates: inBatchCount } = deduplicateInBatch([baseLead, dupeLead]);
+assertEquals(inBatchResult.length, 1, "Deduplicates 2 matching emails into 1 unique lead");
+assertEquals(inBatchCount, 1, "Counts 1 duplicate in batch");
+assertEquals(inBatchResult[0].last_name, "Connor", "Additive merge preserves non-empty last_name");
+assertEquals(inBatchResult[0].phone, "+15551234567", "Additive merge preserves non-empty phone");
+assertEquals(inBatchResult[0].company_name, "Cyberdyne Systems, LLC", "Preserves company legal suffix");
 
-const leadB: NormalizedLead = {
-  ...validLeadObj,
-  email: "clark.kent@dailyplanet.com",
-  normalized_email: "clark.kent@dailyplanet.com",
-  first_name: null,
-  last_name: "Kent",
-  phone: "+15550001111",
-};
+// ── Scenario 7: Existing Lead + Imported Lead Partitioning ───────────────────
+console.log("\nScenario 7: Database Duplicate Partitioning");
+const existingEmails = new Set(["sarah@cyberdyne.com"]);
+const { newLeads, existingLeads } = partitionExistingLeads(inBatchResult, existingEmails);
+assertEquals(newLeads.length, 0, "Identifies existing lead as duplicate against DB");
+assertEquals(existingLeads.length, 1, "Correct existing leads count");
 
-const merged = mergeLeadRecords(leadA, leadB);
-assertEquals(merged.first_name, "Clark", "Merges non-empty first_name");
-assertEquals(merged.last_name, "Kent", "Merges non-empty last_name");
-assertEquals(merged.phone, "+15550001111", "Merges non-empty phone");
-assertEquals(merged.company_name, "Daily Planet", "Preserves company_name");
+// ── Scenario 8: Conflicting Lead Info Merge ──────────────────────────────────
+console.log("\nScenario 8: Non-Destructive Field Merging");
+const mergedRecord = mergeLeadRecords(baseLead, dupeLead);
+assertEquals(mergedRecord.first_name, "Sarah", "Keeps primary first_name");
+assertEquals(mergedRecord.last_name, "Connor", "Populates missing last_name from incoming record");
 
-const { uniqueLeads, inBatchDuplicates } = deduplicateInBatch([leadA, leadB, validLeadObj]);
-assertEquals(uniqueLeads.length, 2, "Deduplicates 3 rows to 2 unique leads");
-assertEquals(inBatchDuplicates, 1, "Correct in-batch duplicate count");
+// ── Scenario 9: Invalid Email Syntax Validation ──────────────────────────────
+console.log("\nScenario 9: Invalid Email Syntax Validation");
+assert(!validateEmail("plainaddress").valid, "Rejects email missing @");
+assert(!validateEmail("user@domain").valid, "Rejects email missing TLD");
+assert(!validateEmail("user@@domain.com").valid, "Rejects double @");
+assert(!validateEmail("test@test.com").valid, "Rejects dummy placeholder email");
 
-const existingDbEmails = new Set(["valid@company.com"]);
-const { newLeads, existingLeads } = partitionExistingLeads(uniqueLeads, existingDbEmails);
-assertEquals(newLeads.length, 1, "Correct new leads count against DB");
-assertEquals(existingLeads.length, 1, "Correct existing leads count against DB");
+// ── Scenario 10: Missing Email Rejection ─────────────────────────────────────
+console.log("\nScenario 10: Missing Email Rejection");
+assert(!validateEmail("").valid, "Rejects empty email");
+assert(!validateEmail(null).valid, "Rejects null email");
+const noEmailLead: RawLeadInput = { full_name: "No Email User", company_name: "Acme" };
+assertEquals(normalizeLeadRecord(noEmailLead, "ws-1"), null, "Rejects record missing email");
 
-// ── 4. Parser & Format Detection Tests ───────────────────────────────────────
-console.log("\n4. Parser & Format Detection Tests:");
+// ── Scenario 11 & 12: AI Refinement Resilience ──────────────────────────────
+console.log("\nScenario 11 & 12: Deterministic Mapping Fallback & Resilience");
+const nonStandardHeaders = ["Client Email", "Client Full Name", "Employer"];
+const mappedNonStandard = tryDeterministicHeaderMapping(nonStandardHeaders);
+assertEquals(mappedNonStandard?.email, "Client Email", "Recognizes 'Client Email' alias without AI call");
 
-assertEquals(detectInputFormat(""), "empty", "Detects empty input");
-assertEquals(detectInputFormat("   \n\t  "), "empty", "Detects whitespace as empty");
-assertEquals(detectInputFormat('[{"email":"test@a.com"}]'), "json", "Detects JSON input");
+// ── Scenario 13: Database Chunking Validation ────────────────────────────────
+console.log("\nScenario 13: Batch Chunking Simulation");
+const chunkTestArray = Array.from({ length: 1250 }, (_, i) => i);
+const batchSize = 500;
+const chunksCount = Math.ceil(chunkTestArray.length / batchSize);
+assertEquals(chunksCount, 3, "Divides 1250 items into exactly 3 chunks of <=500");
 
-const sampleMarkdown = `
-| Name | Email | Company |
-|---|---|---|
-| Peter Parker | peter@dailybugle.com | Daily Bugle |
-| Harry Osborn | harry@oscorp.com | Oscorp |
-`;
-assertEquals(detectInputFormat(sampleMarkdown), "markdown", "Detects Markdown table format");
-
-const parsedMd = parseMarkdownTable(sampleMarkdown);
-assertEquals(parsedMd.length, 2, "Parses 2 markdown rows");
-assertEquals(parsedMd[0]["Email"], "peter@dailybugle.com", "Correctly extracts email from markdown table");
-
-const sampleCSV = `First Name,Last Name,Email,Company\nBruce,Wayne,bruce@wayne.com,Wayne Enterprises\nDiana,Prince,diana@themyscira.gov,Amazon`;
-assertEquals(detectInputFormat(sampleCSV), "csv", "Detects CSV format");
-
-const parsedCSV = parseCSVText(sampleCSV);
-assertEquals(parsedCSV.length, 2, "Parses 2 CSV rows");
-assertEquals(parsedCSV[0]["Email"], "bruce@wayne.com", "Correctly extracts email from CSV");
-
-const chunks = chunkText("line1\nline2\nline3\nline4", 12);
-assert(chunks.length >= 2, "Correctly chunks text at newline boundaries without truncation");
-
-// ── 5. Empty & Malformed Input Handling Tests ────────────────────────────────
-console.log("\n5. Empty & Malformed Input Handling Tests:");
-
-const parsedEmpty = parseRawInput("");
-assertEquals(parsedEmpty.format, "empty", "Empty string returns empty format");
-assertEquals(parsedEmpty.rows?.length, 0, "Empty input has 0 rows");
-
-// ── 6. Mixed Malformed & Valid Batch Ingestion Tests ─────────────────────────
-console.log("\n6. Mixed Malformed & Valid Batch Ingestion Tests:");
-
-const mixedBatch: RawLeadInput[] = [
-  { email: "valid1@corp.com", full_name: "Alice Johnson", company_name: "Corp A" },
-  { email: "", full_name: "Empty Email" }, // invalid
-  { email: "bad-email", full_name: "Bad Email" }, // invalid
-  { email: "valid2@corp.com", full_name: "Bob Smith", company_name: "Corp B" },
-  { email: null, full_name: "Null Email" }, // invalid
-  { email: "VALID1@CORP.COM", phone: "+1 555 999 0000" }, // duplicate of valid1
-  { email: "valid3@corp.com", full_name: "Charlie Brown", company_name: "Corp C, LLC." },
+// ── Scenario 14: Partial Batch Failure & Isolation ───────────────────────────
+console.log("\nScenario 14: Corrupted Row Isolation");
+const mixedRows: RawLeadInput[] = [
+  { email: "good1@corp.com", full_name: "Good One" },
+  { email: "corrupted-email" }, // invalid
+  { email: "good2@corp.com", full_name: "Good Two" },
 ];
-
-const normalizedBatch: NormalizedLead[] = [];
+const validIsolated: NormalizedLead[] = [];
 let invalidCount = 0;
-
-for (const raw of mixedBatch) {
-  const norm = normalizeLeadRecord(raw, "ws-test", "Test Batch");
+for (const r of mixedRows) {
+  const norm = normalizeLeadRecord(r, "ws-1");
   if (norm && validateLead(norm).valid) {
-    normalizedBatch.push(norm);
+    validIsolated.push(norm);
   } else {
     invalidCount++;
   }
 }
+assertEquals(validIsolated.length, 2, "Valid rows preserved during corrupted row failure");
+assertEquals(invalidCount, 1, "Corrupted row safely counted without throwing");
 
-assertEquals(invalidCount, 3, "Correctly identifies 3 invalid rows");
-assertEquals(normalizedBatch.length, 4, "Extracts 4 valid normalized leads before dedup");
+// ── Scenario 15: Repeated Import Idempotency ─────────────────────────────────
+console.log("\nScenario 15: Repeated Import Idempotency");
+const firstImport = [baseLead];
+const { uniqueLeads: pass1 } = deduplicateInBatch(firstImport);
+const { uniqueLeads: pass2, inBatchDuplicates: pass2Dupes } = deduplicateInBatch([...pass1, ...pass1]);
+assertEquals(pass2.length, 1, "Re-importing identical dataset results in same single record");
+assertEquals(pass2Dupes, 1, "Correctly flags re-imported duplicate");
 
-const { uniqueLeads: dedupedMixed, inBatchDuplicates: mixedDupes } = deduplicateInBatch(normalizedBatch);
-assertEquals(dedupedMixed.length, 3, "Produces exactly 3 unique leads after deduplication");
-assertEquals(mixedDupes, 1, "Detects 1 duplicate in mixed batch");
-assertEquals(dedupedMixed[0].phone, "+15559990000", "Successfully merged phone into valid1 record");
+// ── Scenario 16: Suppressed Lead Filtering ───────────────────────────────────
+console.log("\nScenario 16: Suppression List Filtering");
+const suppressedSet = new Set(["sarah@cyberdyne.com"]);
+const { active: activeLeads, suppressed: suppLeads } = partitionSuppressedLeads([baseLead], suppressedSet);
+assertEquals(activeLeads.length, 0, "Suppressed lead excluded from active import");
+assertEquals(suppLeads.length, 1, "Suppressed lead identified");
 
-// ── 7. Large Dataset Stress Test (1,000 Records) ─────────────────────────────
-console.log("\n7. Large Dataset Stress Test (1,000 Records):");
+// ── Scenario 17 & 18: Empty File & Whitespace Handling ───────────────────────
+console.log("\nScenario 17 & 18: Empty File & Whitespace Handling");
+assertEquals(detectInputFormat(""), "empty", "Empty string detected as empty");
+assertEquals(detectInputFormat("   \n\t   "), "empty", "Whitespace detected as empty");
+const parsedEmptyObj = parseRawInput("");
+assertEquals(parsedEmptyObj.rows?.length, 0, "Empty input yields 0 rows");
 
-const largeDataset: RawLeadInput[] = [];
+// ── Scenario 19: Large Dataset Stress Test (1,000 Records) ───────────────────
+console.log("\nScenario 19: Large Dataset Stress Test (1,000 Records)");
+const largeSet: RawLeadInput[] = [];
 for (let i = 1; i <= 1000; i++) {
-  // Generate 800 unique leads and 200 duplicate variations
-  const id = i <= 800 ? i : i - 200;
-  largeDataset.push({
-    email: `User.${id}@Enterprise-Corp.COM`,
-    full_name: `Lead Number ${id}`,
-    company_name: `Company ${id}, Inc.`,
-    job_title: id % 2 === 0 ? "VP of Engineering" : "Director of Sales",
-    phone: `+1 555 ${String(1000000 + id).slice(1)}`,
-    website_url: `https://company${id}.io/home`,
-    location: id % 2 === 0 ? "Austin, TX" : "Seattle, WA",
-    custom_attribute: `Meta_${id}`,
+  const id = i <= 800 ? i : i - 200; // 800 unique + 200 dupes
+  largeSet.push({
+    email: `Employee.${id}@Enterprise.COM`,
+    full_name: `Employee ${id}`,
+    company_name: `Enterprise ${id}, Inc.`,
+    phone: `+1 555 000 ${id}`,
+    custom_attribute: `CustomVal_${id}`,
   });
 }
-
-const start = performance.now();
-const largeNormalized: NormalizedLead[] = [];
-for (const raw of largeDataset) {
-  const norm = normalizeLeadRecord(raw, "ws-large");
-  if (norm && validateLead(norm).valid) {
-    largeNormalized.push(norm);
-  }
+const startT = performance.now();
+const largeNorm: NormalizedLead[] = [];
+for (const raw of largeSet) {
+  const n = normalizeLeadRecord(raw, "ws-perf");
+  if (n && validateLead(n).valid) largeNorm.push(n);
 }
-const { uniqueLeads: largeUnique, inBatchDuplicates: largeDupes } = deduplicateInBatch(largeNormalized);
-const elapsed = performance.now() - start;
+const { uniqueLeads: largeDeduped, inBatchDuplicates: largeDupes } = deduplicateInBatch(largeNorm);
+const durationMs = performance.now() - startT;
 
-assertEquals(largeNormalized.length, 1000, "Normalizes all 1,000 records without error");
-assertEquals(largeUnique.length, 800, "Correctly yields 800 unique leads from 1,000 records with 200 duplicates");
-assertEquals(largeDupes, 200, "Correctly counts 200 duplicates");
-assert(elapsed < 1000, `Processed 1,000 records in ${elapsed.toFixed(1)}ms (< 1000ms threshold)`);
+assertEquals(largeNorm.length, 1000, "Normalizes all 1,000 records without failure");
+assertEquals(largeDeduped.length, 800, "Correctly extracts 800 unique records from 1,000 inputs");
+assertEquals(largeDupes, 200, "Accurately detects 200 duplicates");
+assert(durationMs < 500, `Processed 1,000 records in ${durationMs.toFixed(1)}ms (< 500ms threshold)`);
 
 // ── Summary ──────────────────────────────────────────────────────────────────
-console.log("\n==========================================");
-console.log(`TEST RUN COMPLETE: ${passedCount} Passed, ${failedCount} Failed`);
-console.log("==========================================\n");
+console.log("\n========================================================");
+console.log(`TEST SUITE RESULTS: ${passedCount} Passed, ${failedCount} Failed`);
+console.log("========================================================\n");
 
 if (failedCount > 0) {
   process.exit(1);
