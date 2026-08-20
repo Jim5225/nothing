@@ -1,7 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { Sidebar } from "@/components/layout/sidebar";
 import { TopNav } from "@/components/layout/top-nav";
-import type { User } from "@supabase/supabase-js";
 
 import { redirect } from "next/navigation";
 import { getCurrentWorkspace } from "@/lib/workspace";

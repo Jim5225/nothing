@@ -41,7 +41,7 @@ export default async function CampaignDashboardPage(props: {
   const recipientList = recipients || [];
   const recipientIds = recipientList.map((r) => r.id);
 
-  let jobs: { status: string; job_type: string }[] = [];
+  const jobs: { status: string; job_type: string }[] = [];
   if (recipientIds.length > 0) {
     const chunkSize = 200;
     for (let i = 0; i < recipientIds.length; i += chunkSize) {
