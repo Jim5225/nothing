@@ -137,6 +137,11 @@ export class GmailProvider implements EmailSendingProvider {
         ? `From: =?utf-8?B?${Buffer.from(senderDisplayName).toString("base64")}?= <${account.email_address}>`
         : `From: ${account.email_address}`;
 
+      // Clean up body for plain text (remove markdown bold, HTML tags, and normalize newlines)
+      let plainTextBody = options.body.replace(/\*\*(.*?)\*\*/g, "$1");
+      plainTextBody = plainTextBody.replace(/<[^>]+>/g, "");
+      plainTextBody = plainTextBody.replace(/\r?\n/g, "\r\n");
+      
       // Convert body to clean HTML email structure with proper typography
       let htmlBody = options.body;
       if (!htmlBody.includes("<html") && !htmlBody.includes("<div") && !htmlBody.includes("<p>")) {
@@ -151,13 +156,16 @@ export class GmailProvider implements EmailSendingProvider {
           .join("");
       }
 
+      const boundary = `----=_Part_${crypto.randomUUID().replace(/-/g, "")}`;
+      const messageId = `<${crypto.randomUUID()}@veltrix.app>`;
+
       const messageParts = [
         fromHeader,
         `To: ${options.to}`,
         `Subject: ${utf8Subject}`,
-        "Content-Type: text/html; charset=utf-8",
-        "MIME-Version: 1.0",
+        `Message-ID: ${messageId}`,
         `Date: ${new Date().toUTCString()}`,
+        "MIME-Version: 1.0",
       ];
 
       if (options.inReplyToMessageId) {
@@ -167,8 +175,28 @@ export class GmailProvider implements EmailSendingProvider {
         messageParts.push(`References: ${options.references}`);
       }
 
+      messageParts.push(`Content-Type: multipart/alternative; boundary="${boundary}"`);
       messageParts.push("");
-      messageParts.push(htmlBody);
+      
+      // Plain text part
+      messageParts.push(`--${boundary}`);
+      messageParts.push("Content-Type: text/plain; charset=utf-8");
+      messageParts.push("Content-Transfer-Encoding: base64");
+      messageParts.push("");
+      // Split base64 into 76-character lines to strictly follow RFCs
+      const plainBase64 = Buffer.from(plainTextBody).toString("base64");
+      messageParts.push(plainBase64.match(/.{1,76}/g)?.join("\r\n") || plainBase64);
+
+      // HTML part
+      messageParts.push(`--${boundary}`);
+      messageParts.push("Content-Type: text/html; charset=utf-8");
+      messageParts.push("Content-Transfer-Encoding: base64");
+      messageParts.push("");
+      const htmlBase64 = Buffer.from(htmlBody).toString("base64");
+      messageParts.push(htmlBase64.match(/.{1,76}/g)?.join("\r\n") || htmlBase64);
+
+      messageParts.push(`--${boundary}--`);
+      messageParts.push("");
 
       // MIME standard requires CRLF
       const message = messageParts.join("\r\n");
