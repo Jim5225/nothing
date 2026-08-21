@@ -26,12 +26,11 @@ export default async function CampaignReviewPage(props: {
 
   if (!campaign) redirect("/dashboard/campaigns");
 
-  // Fetch all connected email accounts for selection
+  // Fetch all email accounts for selection so we can show warning if expired
   const { data: accounts } = await supabase
     .from("email_accounts")
-    .select("id, email_address")
-    .eq("workspace_id", workspace.workspace_id)
-    .eq("status", "connected");
+    .select("id, email_address, status")
+    .eq("workspace_id", workspace.workspace_id);
 
   // Fetch recipients
   const { data: recipients } = await supabase

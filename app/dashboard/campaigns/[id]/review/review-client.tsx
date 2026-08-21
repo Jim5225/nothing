@@ -148,8 +148,8 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
             </SelectTrigger>
             <SelectContent>
               {emailAccounts.map((acc) => (
-                <SelectItem key={acc.id} value={acc.id}>
-                  {acc.email_address}
+                <SelectItem key={acc.id} value={acc.id} disabled={acc.status !== "connected"}>
+                  {acc.email_address} {acc.status !== "connected" ? `(${acc.status})` : ""}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -181,16 +181,20 @@ export function ReviewClient({ campaign, recipients, emailAccounts }: ReviewClie
               <CheckCircle2 className="w-4 h-4 mr-2 text-white" />
               View Live Campaign Dashboard
             </Button>
-          ) : (
-            <Button 
-              onClick={() => setApproveOpen(true)} 
-              disabled={!campaign.email_account_id || recipients.length === 0 || isGenerating}
-              className="bg-gradient-to-r from-emerald-500 via-teal-600 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-md shadow-emerald-500/25 border-0 transition-all scale-100 hover:scale-[1.02]"
-            >
-              <CheckCircle2 className="w-4 h-4 mr-2 text-white" />
-              Approve & Send
-            </Button>
-          )}
+          ) : (() => {
+            const selectedAccount = emailAccounts.find(a => a.id === campaign.email_account_id);
+            const isInvalidSender = !selectedAccount || selectedAccount.status !== "connected";
+            return (
+              <Button 
+                onClick={() => setApproveOpen(true)} 
+                disabled={!campaign.email_account_id || recipients.length === 0 || isGenerating || isInvalidSender}
+                className="bg-gradient-to-r from-emerald-500 via-teal-600 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white font-bold shadow-md shadow-emerald-500/25 border-0 transition-all scale-100 hover:scale-[1.02]"
+              >
+                <CheckCircle2 className="w-4 h-4 mr-2 text-white" />
+                Approve & Send
+              </Button>
+            );
+          })()}
         </div>
       </div>
 
