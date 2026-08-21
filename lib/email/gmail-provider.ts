@@ -93,12 +93,15 @@ export class GmailProvider implements EmailSendingProvider {
         .eq("id", this.accountId);
 
       return true;
-    } catch (error) {
-      console.error("[GmailProvider] Failed to refresh Gmail token:", error);
-      await supabase
-        .from("email_accounts")
-        .update({ status: "expired" })
-        .eq("id", this.accountId);
+    } catch (error: any) {
+      console.error("[GmailProvider] Failed to refresh token:", error);
+      // Only set to expired if it's an auth error (400, 401)
+      if (error.response && (error.response.status === 400 || error.response.status === 401)) {
+        await supabase
+          .from("email_accounts")
+          .update({ status: "expired" })
+          .eq("id", this.accountId);
+      }
       return false;
     }
   }
