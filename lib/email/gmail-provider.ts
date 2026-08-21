@@ -116,7 +116,7 @@ export class GmailProvider implements EmailSendingProvider {
     const supabase = await this.getSupabaseClient();
     const { data: account } = await supabase
       .from("email_accounts")
-      .select("access_token, refresh_token, email_address")
+      .select("access_token, refresh_token, email_address, display_name")
       .eq("id", this.accountId)
       .single();
 
@@ -154,6 +154,7 @@ export class GmailProvider implements EmailSendingProvider {
         `Subject: ${utf8Subject}`,
         "Content-Type: text/html; charset=utf-8",
         "MIME-Version: 1.0",
+        `Date: ${new Date().toUTCString()}`,
       ];
 
       if (options.inReplyToMessageId) {
@@ -166,7 +167,8 @@ export class GmailProvider implements EmailSendingProvider {
       messageParts.push("");
       messageParts.push(htmlBody);
 
-      const message = messageParts.join("\n");
+      // MIME standard requires CRLF
+      const message = messageParts.join("\r\n");
       const encodedMessage = Buffer.from(message)
         .toString("base64")
         .replace(/\+/g, "-")

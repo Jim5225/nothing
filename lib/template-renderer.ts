@@ -96,12 +96,10 @@ export function renderTemplate(
   if (!template) return "";
 
   // Replace variables matching {{ ... }} case-insensitively with flexible spacing
-  return template.replace(/\{\{\s*([^{}]+)\s*\}\}/g, (match, rawVariable) => {
+  // Tolerate typos like {{name{{ or }}name}} or {{name}
+  return template.replace(/(?:\{\{|\}\}|\[\[|\{\s)\s*([a-zA-Z0-9\s_-]+)\s*(?:\{\{|\}\}|\]\]|\s\})/gi, (match, rawVariable) => {
     const normalizedKey = normalizeVariableName(rawVariable);
-    if (!normalizedKey) {
-      return match; // Keep unsupported custom variable as is
-    }
-
+    if (!normalizedKey) return match;
     const value = variables[normalizedKey];
     
     // Safely handle missing values

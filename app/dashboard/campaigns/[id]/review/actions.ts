@@ -361,9 +361,10 @@ export async function approveCampaign(campaignId: string) {
     // 8. Trigger immediate background email processing
     try {
       const { processEmailQueue } = await import("@/lib/email/worker");
-      processEmailQueue().catch((err) => console.error("[Worker Immediate Processing Error]", err));
+      await processEmailQueue(); // Wait for the first batch to process immediately
     } catch (err) {
-      console.error("[Worker Import Error]", err);
+      console.error("[Worker Immediate Processing Error]", err);
+      // We don't fail the approval if worker fails, but we awaited it so Next.js doesn't crash
     }
 
     revalidatePath(`/dashboard/campaigns/${campaignId}`);
